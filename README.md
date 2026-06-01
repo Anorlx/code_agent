@@ -142,8 +142,6 @@ context     micro_compact freed≈...
 - `amap-maps`：高德地图能力，例如地址解析、路线规划、天气和地点搜索。
 - `tavily`：联网搜索能力，例如搜索、网页提取、站点地图发现和网页爬取。
 
-因为 `.mcp.json` 里包含 API key，它已经加入 `.gitignore`，不要上传到 GitHub。Terminal 中输入 `/@` 可以选择 MCP server；也可以直接输入 `/@amap-maps ...` 或 `/@tavily ...` 强制本轮优先使用指定 MCP。
-
 ## 📌 设计取向
 
 - **本地优先**：会话、记忆、日志和工具工作区都在项目本地
