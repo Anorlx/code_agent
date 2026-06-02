@@ -14,7 +14,6 @@
 
 > 一个本地优先的 Python Coding Agent：主循环由 LangGraph 驱动，工具调用经过 schema 校验和权限审查，长期记忆、上下文压缩、MCP 接入、Fork 并行调查和 Coordinator 规划被组织成一套可观察的 Agent 工程。
 
-`MAIN_README.md` 是这个 GitHub 首页的维护源；根目录 `README.md` 会保持同内容，用来让 GitHub 首页直接展示。
 
 ## 🧭 Project Console
 
