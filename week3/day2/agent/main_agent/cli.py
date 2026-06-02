@@ -109,8 +109,36 @@ def _format_token_usage(token_usage: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _execution_mode(event: dict[str, Any]) -> str:
+    phase = str(event.get("phase") or "")
+    if phase == "初始化":
+        return ""
+    selected_tools = list(event.get("selected_tools") or [])
+    tool_calls = [
+        call.get("name") or call.get("function", {}).get("name")
+        for call in event.get("tool_calls") or []
+    ]
+    tool_results = [
+        result.get("name")
+        for result in event.get("tool_results") or []
+    ]
+    names = {str(name) for name in [*selected_tools, *tool_calls, *tool_results] if name}
+    if "coordinator_plan" in names:
+        return "coordinator"
+    if "fork_tasks" in names:
+        return "fork"
+    if names:
+        return "tool"
+    if phase in {"API调用", "终止检查"}:
+        return "chat"
+    return ""
+
+
 def _state_suffix(event: dict[str, Any]) -> str:
     details = []
+    mode = _execution_mode(event)
+    if mode:
+        details.append(f"mode={mode}")
     if event.get("selected_tools"):
         details.append("tools " + ",".join(event["selected_tools"]))
     if event.get("tool_calls"):
