@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1160" viewBox="0 0 1500 1160" role="img" aria-labelledby="title desc">
+  <title id="title">real_agent current architecture</title>
+  <desc id="desc">Current architecture diagram for the LangGraph based Python agent, including main agent, sub agents, tools, memory system, DashScope model client, event streaming, and terminal loop.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9333ea"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 750 34px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", Arial, sans-serif; fill: #475569; }
+      .section { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 650 15px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 11px -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", Arial, sans-serif; fill: #64748b; }
+      .mono { font: 600 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #334155; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 16; filter: url(#shadow); }
+      .entry { fill: #fff1f2; stroke: #e11d48; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .main { fill: #e8f4ff; stroke: #2563eb; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .node { fill: #eff6ff; stroke: #3b82f6; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .sub { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .model { fill: #faf5ff; stroke: #9333ea; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .tool { fill: #fefce8; stroke: #ca8a04; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .memory { fill: #fdf4ff; stroke: #c026d3; stroke-width: 2; rx: 12; filter: url(#shadow); }
+      .state { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.5; rx: 12; filter: url(#shadow); }
+      .decision { fill: #fffbeb; stroke: #f59e0b; stroke-width: 2; filter: url(#shadow); }
+      .line { fill: none; stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .blue { fill: none; stroke: #2563eb; stroke-width: 2.2; marker-end: url(#arrow-blue); }
+      .green { fill: none; stroke: #16a34a; stroke-width: 2.2; marker-end: url(#arrow-green); }
+      .purple { fill: none; stroke: #9333ea; stroke-width: 2.2; marker-end: url(#arrow-purple); }
+      .soft { fill: none; stroke: #94a3b8; stroke-width: 1.9; marker-end: url(#arrow); }
+      .dash { fill: none; stroke: #64748b; stroke-width: 2; stroke-dasharray: 7 6; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1500" height="1160"/>
+  <text class="title" x="52" y="58">real_agent 当前架构图</text>
+  <text class="subtitle" x="54" y="86">当前代码主线：main.py -> agent/main_agent/cli.py -> agent/main_agent/graph.py -> LangGraph StateGraph</text>
+
+  <rect class="panel" x="38" y="122" width="315" height="336"/>
+  <text class="section" x="62" y="156">Terminal 外层</text>
+  <rect class="entry" x="72" y="186" width="245" height="60"/>
+  <text class="label" x="98" y="213">python main.py</text>
+  <text class="small" x="98" y="233">导入 agent.main_agent.cli.main</text>
+  <rect class="main" x="72" y="286" width="245" height="72"/>
+  <text class="label" x="100" y="315">chat_loop()</text>
+  <text class="small" x="100" y="337">读输入 / 打印事件 / 保存 history</text>
+  <rect class="state" x="72" y="392" width="245" height="44"/>
+  <text class="label" x="106" y="420">history = last_state.messages</text>
+  <path class="line" d="M194 246 L194 286"/>
+  <path class="line" d="M194 358 L194 392"/>
+
+  <rect class="panel" x="392" y="122" width="690" height="790"/>
+  <text class="section" x="420" y="156">Main Agent: LangGraph 状态机</text>
+  <text class="small" x="420" y="178">agent/main_agent/graph.py 里的 build_agent_graph()</text>
+
+  <rect class="state" x="424" y="206" width="250" height="86"/>
+  <text class="label" x="450" y="236">AgentGraphState</text>
+  <text class="small" x="450" y="258">messages / turn / tool_calls</text>
+  <text class="small" x="450" y="276">memory_context / selected_tools</text>
+
+  <rect class="node" x="752" y="206" width="250" height="70"/>
+  <text class="label" x="796" y="236">初始化</text>
+  <text class="small" x="796" y="258">new_state(history + user)</text>
+
+  <rect class="node" x="580" y="338" width="250" height="78"/>
+  <text class="label" x="624" y="368">preprocess</text>
+  <text class="small" x="624" y="390">turn/token 检查</text>
+  <text class="tiny" x="624" y="408">调用 tool_search 选择工具</text>
+
+  <rect class="node" x="580" y="472" width="250" height="82"/>
+  <text class="label" x="632" y="502">api_call</text>
+  <text class="small" x="632" y="524">主模型流式响应</text>
+  <text class="tiny" x="632" y="542">输出 assistant_delta / tool_call</text>
+
+  <polygon class="decision" points="705,608 846,682 705,756 564,682"/>
+  <text class="label" x="648" y="678">有工具调用?</text>
+  <text class="small" x="662" y="700">conditional edge</text>
+  <text class="tiny" x="536" y="720">否</text>
+  <text class="tiny" x="862" y="720">是</text>
+
+  <rect class="node" x="444" y="800" width="230" height="64"/>
+  <text class="label" x="482" y="828">termination_check</text>
+  <text class="small" x="482" y="850">completed / stop_hook</text>
+
+  <rect class="node" x="760" y="800" width="230" height="64"/>
+  <text class="label" x="804" y="828">tool_execution</text>
+  <text class="small" x="804" y="850">交给 tool_runner</text>
+
+  <rect class="node" x="760" y="980" width="230" height="64"/>
+  <text class="label" x="804" y="1008">result_backfill</text>
+  <text class="small" x="804" y="1030">tool results -> messages</text>
+
+  <rect class="entry" x="444" y="980" width="230" height="64"/>
+  <text class="label" x="520" y="1008">END</text>
+  <text class="small" x="490" y="1030">terminal reason</text>
+
+  <path class="blue" d="M317 414 C364 414 360 248 424 248"/>
+  <path class="soft" d="M674 248 L752 241"/>
+  <path class="blue" d="M877 276 C877 314 825 326 760 338"/>
+  <path class="blue" d="M705 416 L705 472"/>
+  <path class="blue" d="M705 554 L705 608"/>
+  <path class="blue" d="M589 704 C536 734 532 768 559 800"/>
+  <path class="blue" d="M820 704 C882 734 898 768 875 800"/>
+  <path class="blue" d="M875 864 L875 980"/>
+  <path class="blue" d="M760 1012 C608 1008 586 916 559 864"/>
+  <path class="dash" d="M990 1012 C1078 936 1060 366 830 377"/>
+  <text class="tiny" x="1018" y="660">下一轮</text>
+
+  <rect class="panel" x="1122" y="122" width="330" height="790"/>
+  <text class="section" x="1148" y="156">Sub Agents / 模型 / 工具</text>
+
+  <rect class="sub" x="1158" y="190" width="258" height="78"/>
+  <text class="label" x="1182" y="220">tool_search</text>
+  <text class="small" x="1182" y="242">qwen3.5-flash，读工具目录</text>
+  <text class="tiny" x="1182" y="260">返回 selected_tools</text>
+
+  <rect class="model" x="1158" y="306" width="258" height="78"/>
+  <text class="label" x="1182" y="336">model_client</text>
+  <text class="small" x="1182" y="358">DashScope compatible API</text>
+  <text class="tiny" x="1182" y="376">stream text + merge tool calls</text>
+
+  <rect class="sub" x="1158" y="424" width="258" height="86"/>
+  <text class="label" x="1182" y="454">tool_runner</text>
+  <text class="small" x="1182" y="476">真正执行工具</text>
+  <text class="tiny" x="1182" y="494">parallel_safe 工具可并发</text>
+
+  <rect class="sub" x="1158" y="548" width="258" height="78"/>
+  <text class="label" x="1182" y="578">permission_review</text>
+  <text class="small" x="1182" y="600">工具执行前审查风险</text>
+  <text class="tiny" x="1182" y="618">高风险命令可拦截</text>
+
+  <rect class="tool" x="1158" y="664" width="258" height="128"/>
+  <text class="label" x="1182" y="694">Tools Registry</text>
+  <text class="small" x="1182" y="716">read/write/delete/list</text>
+  <text class="small" x="1182" y="738">ls/grep/read_project_file</text>
+  <text class="small" x="1182" y="760">calculator/time/run_command</text>
+  <text class="small" x="1182" y="782">save_memory</text>
+
+  <path class="green" d="M830 377 C958 374 1008 230 1158 230"/>
+  <path class="purple" d="M830 513 C956 508 1008 346 1158 346"/>
+  <path class="green" d="M990 832 C1050 814 1080 468 1158 468"/>
+  <path class="green" d="M1287 510 L1287 548"/>
+  <path class="green" d="M1287 626 L1287 664"/>
+
+  <rect class="panel" x="38" y="500" width="315" height="330"/>
+  <text class="section" x="62" y="534">流式事件输出</text>
+  <rect class="state" x="72" y="566" width="245" height="66"/>
+  <text class="label" x="96" y="596">asyncio.Queue</text>
+  <text class="small" x="96" y="616">event_sink = put_nowait</text>
+
+  <rect class="state" x="72" y="672" width="245" height="66"/>
+  <text class="label" x="96" y="702">_print_event()</text>
+  <text class="small" x="96" y="722">state / delta / tool / terminal</text>
+
+  <rect class="entry" x="72" y="778" width="245" height="42"/>
+  <text class="label" x="122" y="805">Terminal 实时显示</text>
+
+  <path class="soft" d="M424 600 C355 600 350 600 317 600"/>
+  <path class="soft" d="M194 632 L194 672"/>
+  <path class="soft" d="M194 738 L194 778"/>
+
+  <rect class="panel" x="38" y="864" width="315" height="226"/>
+  <text class="section" x="62" y="898">长期记忆入口</text>
+  <rect class="memory" x="72" y="930" width="245" height="62"/>
+  <text class="label" x="96" y="958">memory_retrieval</text>
+  <text class="small" x="96" y="978">每轮运行前选相关记忆</text>
+  <rect class="memory" x="72" y="1022" width="245" height="48"/>
+  <text class="label" x="96" y="1052">memory_context 注入系统提示</text>
+
+  <path class="purple" d="M194 930 C194 860 430 850 580 520"/>
+  <path class="purple" d="M194 992 L194 1022"/>
+
+  <rect class="panel" x="392" y="930" width="300" height="184"/>
+  <text class="section" x="420" y="964">终止与回收</text>
+  <text class="small" x="420" y="990">completed / max_turns</text>
+  <text class="small" x="420" y="1012">blocking_limit / model_error</text>
+  <text class="small" x="420" y="1034">aborted_streaming / aborted_tools</text>
+  <text class="small" x="420" y="1056">stop_hook_prevented / hook_stopped</text>
+  <text class="tiny" x="420" y="1086">CLI 保存 messages 后触发 MemoryObserver</text>
+
+  <rect class="panel" x="732" y="930" width="330" height="184"/>
+  <text class="section" x="760" y="964">后台记忆写入</text>
+  <rect class="memory" x="760" y="990" width="264" height="52"/>
+  <text class="label" x="782" y="1020">MemoryObserver</text>
+  <text class="small" x="782" y="1038">默认每 3 轮触发一次</text>
+  <rect class="memory" x="760" y="1060" width="264" height="38"/>
+  <text class="label" x="782" y="1085">memory_writer</text>
+
+  <rect class="panel" x="1122" y="930" width="330" height="184"/>
+  <text class="section" x="1148" y="964">持久化目录</text>
+  <rect class="memory" x="1158" y="990" width="258" height="52"/>
+  <text class="label" x="1182" y="1020">memory/</text>
+  <text class="small" x="1182" y="1038">MEMORY.md + user/project/...</text>
+  <rect class="tool" x="1158" y="1060" width="258" height="38"/>
+  <text class="label" x="1182" y="1085">agent_write/</text>
+
+  <path class="purple" d="M317 958 C520 940 688 1016 760 1016"/>
+  <path class="purple" d="M1024 1079 L1158 1079"/>
+  <path class="purple" d="M1416 1016 C1462 960 1462 744 1416 728"/>
+  <text class="tiny" x="1368" y="904">save_memory 也写 memory/</text>
+
+  <text class="mono" x="54" y="1136">核心文件：main.py, agent/main_agent/cli.py, agent/main_agent/graph.py, agent/main_agent/model_client.py, agent/sub_agent/*.py, agent/tools/registry.py, agent/memory_system/*.py</text>
+</svg>
