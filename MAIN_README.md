@@ -12,9 +12,6 @@
   <img alt="Safety" src="https://img.shields.io/badge/Safety-Permission%20Review-D97706">
 </p>
 
-> 一个本地优先的 Python Coding Agent：主循环由 LangGraph 驱动，工具调用经过 schema 校验和权限审查，长期记忆、上下文压缩、MCP 接入、Fork 并行调查和 Coordinator 规划被组织成一套可观察的 Agent 工程。
-
-
 ## 🧭 Project Console
 
 | 入口 | 看什么 | 关键位置 |
