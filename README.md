@@ -35,6 +35,47 @@
 
 ---
 
+## 🗓️ Week3 Day3
+
+今天主要做的是交互层和流式工具执行的升级，不是新增某个具体工具，而是让 Agent 的运行方式更接近真正的实时 runtime。
+
+| 模块 | 今天做了什么 | 为什么重要 |
+| --- | --- | --- |
+| `submitMessage` | 新增异步消息提交入口，调用者可以 `async for` 实时消费事件 | UI 不需要等待整轮查询结束，可以边生成、边渲染、边处理工具 |
+| Streaming events | 模型流里补充 `message_start`、`message_delta`、`message_stop`、`content_block_*` | 文本、工具调用、usage、progress 都能以更细粒度被观察 |
+| Incremental tool use | 工具 JSON 参数流式拼完整后即可启动工具 | 工具不用等模型整段响应结束，降低体感延迟 |
+| StreamingToolExecutor | 给工具执行器加状态机和并发调度 | Read/Grep 等安全工具可并行，Write/Bash 等副作用工具独占执行 |
+| Ordered results | 工具可以并发跑，但结果按提交顺序回填 | 避免模型把工具 A/B 的结果顺序理解错 |
+| Sibling abort | `run_command` 失败时取消正在并行的兄弟工具 | Bash 类命令通常有隐式依赖，失败后继续执行风险更高 |
+
+```mermaid
+flowchart TD
+    user["用户输入"] --> submit["submitMessage()"]
+    submit --> stream["Streaming model events"]
+    stream --> text["message_delta<br/>实时输出文本"]
+    stream --> block["content_block_*<br/>增量工具参数"]
+    block --> ready{"JSON 参数完整?"}
+    ready -->|yes| executor["StreamingToolExecutor"]
+    executor --> queue["queued"]
+    queue --> can{"canExecuteTool?"}
+    can -->|safe 并发| executing["executing"]
+    can -->|unsafe 独占| waiting["waiting"]
+    executing --> completed["completed"]
+    completed --> yielded["yielded<br/>按提交顺序输出"]
+    yielded --> backfill["tool_result 回填"]
+    backfill --> submit
+
+    classDef process fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#082f49
+    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
+    classDef done fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+
+    class user,submit,stream,text,block,executor,queue,executing,waiting,backfill process
+    class ready,can decision
+    class completed,yielded done
+```
+
+---
+
 ## 🧠 Runtime Map
 
 ```mermaid
@@ -230,4 +271,3 @@ context     micro_compact freed≈...
 | Permission-aware | 写文件、命令执行、删除、MCP 等能力进入统一审查路径 |
 | Context-conscious | 通过 snip、micro compact、collapse、auto compact 降低长任务上下文压力 |
 | Composable | 主 Agent、子 Agent、工具、MCP、Fork、Coordinator 边界清楚，可以继续扩展 |
-
