@@ -1,0 +1,88 @@
+<svg width="1440" height="520" viewBox="0 0 1440 520" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">code_agent visual cover</title>
+  <desc id="desc">A polished terminal agent interface with graph loop, permission gate, memory, MCP tools, fork workers and coordinator planning blocks.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1440" y2="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="0.48" stop-color="#102033"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="90" y1="72" x2="1350" y2="460" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#182337"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#86EFAC"/>
+      <stop offset="1" stop-color="#16A34A"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FDA4AF"/>
+      <stop offset="1" stop-color="#DB2777"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FDE68A"/>
+      <stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+    <style>
+      .title{font:800 58px Inter,Segoe UI,Arial,sans-serif;fill:#F8FAFC}
+      .subtitle{font:500 22px Inter,Segoe UI,Arial,sans-serif;fill:#CBD5E1}
+      .mono{font:600 18px SFMono-Regular,Consolas,monospace;fill:#D7E3F4}
+      .small{font:600 15px Inter,Segoe UI,Arial,sans-serif;fill:#94A3B8}
+      .label{font:800 18px Inter,Segoe UI,Arial,sans-serif;fill:#F8FAFC}
+      .tag{font:700 13px Inter,Segoe UI,Arial,sans-serif;fill:#DCEBFF}
+      .muted{font:600 13px Inter,Segoe UI,Arial,sans-serif;fill:#8392A8}
+      .line{stroke:#334155;stroke-width:2}
+      .flow{stroke:#60A5FA;stroke-width:3;stroke-linecap:round;stroke-dasharray:8 10}
+    </style>
+  </defs>
+  <rect width="1440" height="520" rx="0" fill="url(#bg)"/>
+  <path d="M0 431C171 384 301 421 459 376C622 329 704 256 873 279C1072 306 1179 414 1440 356V520H0V431Z" fill="#0B1220" opacity="0.78"/>
+  <path d="M178 91H1262C1310.6 91 1350 130.4 1350 179V396C1350 431.3 1321.3 460 1286 460H154C118.7 460 90 431.3 90 396V179C90 130.4 129.4 91 178 91Z" fill="url(#panel)" stroke="#263449" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="130" cy="126" r="8" fill="#F87171"/>
+  <circle cx="158" cy="126" r="8" fill="#FBBF24"/>
+  <circle cx="186" cy="126" r="8" fill="#34D399"/>
+  <text x="128" y="194" class="title">code_agent</text>
+  <text x="132" y="235" class="subtitle">Local-first coding runtime for graph execution, safe tools, memory and MCP.</text>
+  <rect x="130" y="279" width="440" height="58" rx="12" fill="#08111F" stroke="#243348"/>
+  <text x="154" y="315" class="mono">code_agent&gt; inspect repo safety</text>
+  <text x="132" y="383" class="small">Observable terminal runtime</text>
+  <text x="132" y="413" class="small">Schema gate · Context manager · Tool router · User approval</text>
+  <g transform="translate(665 142)">
+    <rect x="0" y="0" width="190" height="74" rx="14" fill="#10223A" stroke="#3B82F6" stroke-width="2"/>
+    <text x="24" y="31" class="label">StateGraph</text>
+    <text x="24" y="55" class="muted">preprocess → API → tools</text>
+    <rect x="244" y="0" width="190" height="74" rx="14" fill="#16251B" stroke="#22C55E" stroke-width="2"/>
+    <text x="268" y="31" class="label">Tool Registry</text>
+    <text x="268" y="55" class="muted">built-in · MCP · skills</text>
+    <rect x="488" y="0" width="190" height="74" rx="14" fill="#2A1722" stroke="#EC4899" stroke-width="2"/>
+    <text x="512" y="31" class="label">Memory</text>
+    <text x="512" y="55" class="muted">TTL · score · observer</text>
+    <path class="flow" d="M190 37H244"/>
+    <path class="flow" d="M434 37H488"/>
+    <rect x="122" y="132" width="190" height="74" rx="14" fill="#271D0D" stroke="#F59E0B" stroke-width="2"/>
+    <text x="146" y="163" class="label">Permission Gate</text>
+    <text x="146" y="187" class="muted">validate · review · ask</text>
+    <rect x="366" y="132" width="190" height="74" rx="14" fill="#111B2E" stroke="#38BDF8" stroke-width="2"/>
+    <text x="390" y="163" class="label">Fork / Coordinator</text>
+    <text x="390" y="187" class="muted">parallel research · specs</text>
+    <path class="flow" d="M339 74V104C339 119 327 132 312 132"/>
+    <path class="flow" d="M339 74V104C339 119 351 132 366 132"/>
+  </g>
+  <g transform="translate(902 384)">
+    <rect x="0" y="0" width="86" height="30" rx="15" fill="url(#blue)"/>
+    <text x="20" y="20" class="tag">graph</text>
+    <rect x="98" y="0" width="102" height="30" rx="15" fill="url(#green)"/>
+    <text x="119" y="20" class="tag">local</text>
+    <rect x="212" y="0" width="118" height="30" rx="15" fill="url(#pink)"/>
+    <text x="234" y="20" class="tag">review</text>
+    <rect x="342" y="0" width="92" height="30" rx="15" fill="url(#amber)"/>
+    <text x="366" y="20" class="tag">MCP</text>
+  </g>
+</svg>

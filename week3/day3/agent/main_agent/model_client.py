@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+import json
+import os
+from typing import Any, AsyncGenerator
+
+from agent.main_agent.config import DASHSCOPE_COMPATIBLE_BASE_URL
+
+
+def _normalize_messages(messages: list[dict[str, Any]], system_prompt: str) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    for message in messages:
+        role = message.get("role")
+        item: dict[str, Any] = {"role": role, "content": message.get("content") or ""}
+        if role == "assistant" and message.get("tool_calls"):
+            item["tool_calls"] = [_to_openai_tool_call(call) for call in message["tool_calls"]]
+        if role == "tool":
+            item["tool_call_id"] = message.get("tool_call_id") or message.get("name")
+            item["name"] = message.get("name")
+        normalized.append(item)
+    return normalized
+
+
+def _to_openai_tool_call(tool_call: dict[str, Any]) -> dict[str, Any]:
+    name = tool_call.get("name") or tool_call.get("function", {}).get("name")
+    arguments = tool_call.get("arguments") or tool_call.get("function", {}).get("arguments") or "{}"
+    if not isinstance(arguments, str):
+        arguments = json.dumps(arguments, ensure_ascii=False)
+    return {
+        "id": str(tool_call.get("id") or name),
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+def _chunk_delta(chunk: Any) -> Any:
+    if not chunk.choices:
+        return None
+    return chunk.choices[0].delta
+
+
+def _usage_dict(usage: Any) -> dict[str, Any]:
+    if usage is None:
+        return {}
+    if isinstance(usage, dict):
+        data = dict(usage)
+    elif hasattr(usage, "model_dump"):
+        data = usage.model_dump()
+    else:
+        data = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        }
+    return {key: value for key, value in data.items() if value is not None}
+
+
+def _merge_tool_call_fragment(bucket: dict[int, dict[str, Any]], fragment: Any) -> None:
+    index = int(getattr(fragment, "index", 0) or 0)
+    current = bucket.setdefault(
+        index,
+        {"id": None, "name": None, "arguments": "", "type": "function"},
+    )
+    if getattr(fragment, "id", None):
+        current["id"] = fragment.id
+    function = getattr(fragment, "function", None)
+    if function is None:
+        return
+    if getattr(function, "name", None):
+        current["name"] = function.name
+    if getattr(function, "arguments", None):
+        current["arguments"] += function.arguments
+
+
+async def dashscope_stream_chat(
+    messages: list[dict[str, Any]],
+    system_prompt: str,
+    tools: list[dict[str, Any]],
+    model_name: str,
+) -> AsyncGenerator[dict[str, Any], None]:
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as exc:
+        raise RuntimeError("openai package is not installed in this conda env.") from exc
+
+    api_key = os.getenv("DASHSCOPE_API_KEY")
+    if not api_key:
+        raise RuntimeError("DASHSCOPE_API_KEY is not set.")
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=os.getenv("DASHSCOPE_BASE_URL", DASHSCOPE_COMPATIBLE_BASE_URL),
+    )
+    kwargs: dict[str, Any] = {
+        "model": model_name,
+        "messages": _normalize_messages(messages, system_prompt),
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if tools:
+        kwargs["tools"] = tools
+
+    tool_call_fragments: dict[int, dict[str, Any]] = {}
+    started_text_block = False
+    started_tool_blocks: set[int] = set()
+    stream = await client.chat.completions.create(**kwargs)
+    async for chunk in stream:
+        usage = _usage_dict(getattr(chunk, "usage", None))
+        if usage:
+            usage["kind"] = "dashscope_usage"
+            usage["model"] = model_name
+            yield {"type": "token_usage", "token_usage": usage}
+            continue
+
+        delta = _chunk_delta(chunk)
+        if delta is None:
+            continue
+        content = getattr(delta, "content", None)
+        if content:
+            if not started_text_block:
+                started_text_block = True
+                yield {"type": "content_block_start", "index": 0, "block": {"type": "text"}}
+            yield {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": content},
+            }
+            yield {"type": "assistant_delta", "content": content}
+
+        for tool_call_fragment in getattr(delta, "tool_calls", None) or []:
+            index = int(getattr(tool_call_fragment, "index", 0) or 0)
+            block_index = index + 1
+            _merge_tool_call_fragment(tool_call_fragments, tool_call_fragment)
+            current = tool_call_fragments[index]
+            if index not in started_tool_blocks and current.get("name"):
+                started_tool_blocks.add(index)
+                yield {
+                    "type": "content_block_start",
+                    "index": block_index,
+                    "block": {
+                        "type": "tool_use",
+                        "id": current.get("id") or current.get("name") or f"tool-{index}",
+                        "name": current.get("name"),
+                    },
+                }
+            function = getattr(tool_call_fragment, "function", None)
+            partial_json = getattr(function, "arguments", None) if function is not None else None
+            if partial_json:
+                yield {
+                    "type": "content_block_delta",
+                    "index": block_index,
+                    "delta": {"type": "input_json_delta", "partial_json": partial_json},
+                }
+
+    if started_text_block:
+        yield {"type": "content_block_stop", "index": 0, "block_type": "text"}
+    for index in sorted(tool_call_fragments):
+        tool_call = tool_call_fragments[index]
+        if index in started_tool_blocks:
+            yield {"type": "content_block_stop", "index": index + 1, "block_type": "tool_use"}
+        yield {
+            "type": "tool_call",
+            "tool_call": {
+                "id": tool_call["id"] or tool_call["name"] or f"tool-{index}",
+                "name": tool_call["name"],
+                "arguments": tool_call["arguments"] or "{}",
+            },
+        }
