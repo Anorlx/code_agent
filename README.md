@@ -4,18 +4,37 @@
   <img src="./assets/main-readme-tech-cover.svg" alt="code_agent cybernetic runtime cover" width="100%">
 </p>
 
-<p align="center">
-  <a href="https://github.com/Anorlx/code_agent"><img alt="GitHub repo" src="https://img.shields.io/badge/GitHub-Anorlx%2Fcode__agent-181717?logo=github"></a>
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white">
-  <img alt="Runtime" src="https://img.shields.io/badge/Runtime-QueryEngine%20%2B%20StateGraph-38BDF8">
-  <img alt="Tools" src="https://img.shields.io/badge/Tools-Built--in%20%7C%20MCP%20%7C%20Skills-8B5CF6">
-  <img alt="Safety" src="https://img.shields.io/badge/Safety-Permission%20Gate-F59E0B">
-  <img alt="Memory" src="https://img.shields.io/badge/Memory-TTL%20%2B%20Observer-22C55E">
-</p>
-
 _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具实时执行、权限审查、长期记忆、MCP 动态工具、Fork 并行调查和 Coordinator 规划被组织成一套可观察、可扩展、可控的 Agent 系统。_
 
 > `MAIN_README.md` 是 GitHub 首页的维护源。需要展示到仓库首页时，把它同步到根目录 `README.md` 即可。
+
+<p align="center">
+  <a href="#system-console"><b>System console</b></a>
+  ·
+  <a href="#runtime-topology"><b>Runtime topology</b></a>
+  ·
+  <a href="#streaming-tools"><b>Streaming tools</b></a>
+  ·
+  <a href="#permission-gate"><b>Permission gate</b></a>
+  ·
+  <a href="#tool-fabric"><b>Tool fabric</b></a>
+  ·
+  <a href="#orchestration-layer"><b>Orchestration</b></a>
+</p>
+
+<a id="command-deck"></a>
+
+## 🕹️ command deck
+
+| [Runtime core](#runtime-topology) | [Streaming tools](#streaming-tools) | [Permission gate](#permission-gate) |
+| --- | --- | --- |
+| `QueryEngine` + `StateGraph` 组成一轮可观察执行链路 | 模型流式输出时就能捕获 tool call，并展示工具状态 | schema、权限规则、上下文风险和用户确认在同一条安全门 |
+
+| [Tool fabric](#tool-fabric) | [Memory context](#memory-context) | [Orchestration](#orchestration-layer) |
+| --- | --- | --- |
+| 内置工具、MCP、skills 进入统一 registry | 长期记忆和上下文压缩共同支撑长任务 | Fork 并行调查，Coordinator 综合实施规格 |
+
+<a id="system-console"></a>
 
 ## 🧭 system console
 
@@ -37,6 +56,8 @@ _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具
 </details>
 
 ---
+
+<a id="runtime-topology"></a>
 
 ## 🧠 runtime topology
 
@@ -89,6 +110,8 @@ flowchart TB
     class blocked blocked
 ```
 
+<a id="streaming-tools"></a>
+
 ## ⚡ streaming tool execution
 
 `QueryEngine` 里新增的 `StreamingToolExecutor` 让工具调用不再只是“模型输出结束后批量执行”。它会在流式事件中捕获 tool call，立刻进入队列，并把工具状态作为事件吐给 terminal。
@@ -110,6 +133,8 @@ flowchart TB
 
 ---
 
+<a id="permission-gate"></a>
+
 ## 🛡️ permission gate
 
 工具执行前会走统一的安全门，而不是让模型直接碰文件、命令或外部 MCP。
@@ -126,6 +151,8 @@ flowchart TB
 </p>
 
 截图里的 `run_command` 被 `validateInput` 拦住：`command` 参数不是 schema 要求的数组，所以系统展示风险、阶段和原因，等待用户本次允许或拒绝。
+
+<a id="tool-fabric"></a>
 
 ## 🔌 tool fabric
 
@@ -169,6 +196,8 @@ flowchart LR
 
 ---
 
+<a id="orchestration-layer"></a>
+
 ## 🧩 orchestration layer
 
 | Mode | Job | Boundary |
@@ -195,6 +224,8 @@ sequenceDiagram
     Coord-->>Main: implementation specification
     Main-->>User: concise next action
 ```
+
+<a id="memory-context"></a>
 
 ## 🧬 memory and context
 
@@ -227,6 +258,8 @@ flowchart TB
     class prompt prompt
 ```
 
+<a id="project-matrix"></a>
+
 ## 🧱 project matrix
 
 ```text
@@ -251,6 +284,8 @@ agent/
 assets/                   README visuals and permission screenshot
 main.py                   local entrypoint
 ```
+
+<a id="quick-start"></a>
 
 ## 🚀 quick start
 
@@ -288,4 +323,3 @@ context     micro_compact freed≈...
 | Streaming-first | 模型输出和工具执行可以在同一轮事件流里推进 |
 | Context-conscious | 大上下文通过 snip、compact、collapse 控制，不靠硬塞 |
 | Extensible | 内置工具、MCP、skills、Fork、Coordinator 都通过清晰边界继续扩展 |
-
