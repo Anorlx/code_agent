@@ -1,288 +1,258 @@
 # code_agent
 
 <p align="center">
-  <img src="./assets/main-readme-cover.svg" alt="code_agent advanced project cover" width="100%">
+  <img src="./assets/main-readme-tech-cover.svg" alt="code_agent cybernetic runtime cover" width="100%">
 </p>
 
 <p align="center">
   <a href="https://github.com/Anorlx/code_agent"><img alt="GitHub repo" src="https://img.shields.io/badge/GitHub-Anorlx%2Fcode__agent-181717?logo=github"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white">
-  <img alt="Runtime" src="https://img.shields.io/badge/Runtime-LangGraph%20StateGraph-2563EB">
-  <img alt="Model" src="https://img.shields.io/badge/Model-DashScope%20OpenAI--compatible-16A34A">
-  <img alt="Safety" src="https://img.shields.io/badge/Safety-Permission%20Review-D97706">
+  <img alt="Runtime" src="https://img.shields.io/badge/Runtime-QueryEngine%20%2B%20StateGraph-38BDF8">
+  <img alt="Tools" src="https://img.shields.io/badge/Tools-Built--in%20%7C%20MCP%20%7C%20Skills-8B5CF6">
+  <img alt="Safety" src="https://img.shields.io/badge/Safety-Permission%20Gate-F59E0B">
+  <img alt="Memory" src="https://img.shields.io/badge/Memory-TTL%20%2B%20Observer-22C55E">
 </p>
 
-> 一个本地优先的 Python Coding Agent：主循环由 LangGraph 驱动，工具调用经过 schema 校验和权限审查，长期记忆、上下文压缩、MCP 接入、Fork 并行调查和 Coordinator 规划被组织成一套可观察的 Agent 工程。
+_一个本地优先的 Python Coding Agent runtime：模型流式输出、工具实时执行、权限审查、长期记忆、MCP 动态工具、Fork 并行调查和 Coordinator 规划被组织成一套可观察、可扩展、可控的 Agent 系统。_
 
-`MAIN_README.md` 是这个 GitHub 首页的维护源；根目录 `README.md` 会保持同内容，用来让 GitHub 首页直接展示。
+> `MAIN_README.md` 是 GitHub 首页的维护源。需要展示到仓库首页时，把它同步到根目录 `README.md` 即可。
 
-## 🧭 Project Console
+## 🧭 system console
 
-| 入口 | 看什么 | 关键位置 |
+| Layer | Capability | Core files |
 | --- | --- | --- |
-| Runtime | 一轮任务如何从输入、模型、工具到结果回填 | `agent/main_agent/graph.py` |
-| Tools | 内置工具、MCP 工具、skills 工具如何统一注册 | `agent/tools/registry.py` |
-| Safety | 工具参数、风险等级、用户确认如何串起来 | `agent/sub_agent/tool_runner.py`, `agent/sub_agent/permission_review.py` |
-| Memory | 长期记忆如何保存、衰减、检索和观察 | `agent/memory_system/` |
-| Orchestration | Fork 并行调查和 Coordinator 生成实施规格 | `agent/fork/`, `agent/Coordinator/` |
+| Runtime core | `QueryEngine.submit_message` 流式事件循环，兼容 StateGraph 运行链路 | `agent/main_agent/query_engine.py`, `agent/main_agent/graph.py` |
+| Terminal cockpit | 会话选择、流式输出、工具状态、权限确认、token/context 事件 | `agent/main_agent/cli.py`, `agent/main_agent/terminal_ui.py` |
+| Tool fabric | 内置工具、MCP 工具、skills 预留统一成 function schema | `agent/tools/registry.py`, `agent/tools/tool/`, `agent/tools/mcp/`, `agent/tools/skills/` |
+| Safety gate | schema 校验、权限规则、上下文审查、用户确认 | `agent/sub_agent/tool_runner.py`, `agent/sub_agent/permission_review.py` |
+| Context engine | snip、micro compact、collapse、auto compact，支撑长任务运行 | `agent/main_agent/context_manager.py` |
+| Memory mesh | 长期记忆索引、TTL、score、后台观察和检索 | `agent/memory_system/`, `agent/sub_agent/memory_retrieval.py` |
+| Orchestration | Fork worker 并行只读调查，Coordinator 生成实施规格 | `agent/fork/`, `agent/Coordinator/` |
 
 <details open>
-<summary><b>展开：这个项目真正解决的事</b></summary>
+<summary><b>当前项目画像</b></summary>
 
-`code_agent` 不是只把模型接到 terminal。它更像一个小型 Agent runtime：主 Agent 负责判断任务方向，工具系统负责把能力以 schema 暴露出来，权限管线负责把高风险动作挡在用户确认前，上下文管理负责让长任务继续跑，记忆系统负责保留跨会话线索，多 Agent 编排负责把复杂问题拆成并行研究和综合规格。
+`code_agent` 已经不是“模型 + 几个工具”的 demo，而是一个正在成型的本地 Agent runtime。它把用户输入拆进可观察的事件流：模型边输出，工具边进入队列；只读工具可以并发推进，写入和命令类动作会进入权限门；MCP 工具动态发现并缓存；长任务过程中上下文会被压缩；跨会话线索由长期记忆系统维护；复杂任务可以交给 Fork 或 Coordinator 做并行研究和规格综合。
 
 </details>
 
 ---
 
-## 🗓️ Week3 Day4
-
-今天优化的是启动阶段：把原本偏串行的 session 初始化、工具注册和 MCP discovery 改成“并行预取 + 缓存优先 + 后台刷新”。目标是减少从 `python main.py` 到进入 `code_agent>` 的等待时间，尤其是配置多个 MCP server 时。
-
-| 模块 | 今天做了什么 | 为什么重要 |
-| --- | --- | --- |
-| MCP discovery | 多个 MCP server 的 `list_tools()` 并发执行 | 启动耗时接近最慢的 server，而不是所有 server 耗时相加 |
-| Startup prefetch | `_load_tools()` 和 session setup / session 选择重叠执行 | 用户选择会话时后台已经在加载本地工具和 MCP schema |
-| MCP schema cache | 新增 `.agent_data/mcp_tools_cache.json` | 第二次启动可先用上次成功发现的 schema，后台再刷新 |
-| Safe fingerprint | cache fingerprint 只使用 server name、command、args、cwd、env key 名称 | 不把 API key/token/password 等 env value 写入缓存 |
-| Background refresh | cache 命中后先进入 terminal，后台刷新成功后原地更新 tools dict | 兼顾启动速度和 MCP tool schema 新鲜度 |
-| Startup metrics | 记录 session、local tools、MCP discovery、cache hit、tools total 等耗时 | 方便从 `logs/agent.log` 判断启动瓶颈 |
-
-```mermaid
-flowchart TD
-    start["python main.py"] --> spawn["create_task(_load_tools)"]
-    spawn --> session["SessionStore.setup + choose_session"]
-    spawn --> local["get_tool_registry"]
-    local --> cache{"MCP cache usable?"}
-    cache -->|yes| cached["register cached MCP tools"]
-    cached --> prompt["enter code_agent>"]
-    cached --> refresh["background refresh MCP tools"]
-    cache -->|no| discover["parallel MCP discovery"]
-    discover --> prompt
-    refresh --> update["update tools dict + cache"]
-
-    subgraph discovery["parallel list_tools"]
-        amap["amap list_tools"]
-        tavily["tavily list_tools"]
-        docs["other list_tools"]
-    end
-
-    discover --> amap
-    discover --> tavily
-    discover --> docs
-
-    classDef process fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#082f49
-    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
-    classDef done fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
-
-    class start,spawn,session,local,cached,discover,refresh,update,amap,tavily,docs process
-    class cache decision
-    class prompt done
-```
-
----
-
-## 🗓️ Week3 Day3
-
-今天主要做的是交互层和流式工具执行的升级，不是新增某个具体工具，而是让 Agent 的运行方式更接近真正的实时 runtime。
-
-| 模块 | 今天做了什么 | 为什么重要 |
-| --- | --- | --- |
-| `submitMessage` | 新增异步消息提交入口，调用者可以 `async for` 实时消费事件 | UI 不需要等待整轮查询结束，可以边生成、边渲染、边处理工具 |
-| Streaming events | 模型流里补充 `message_start`、`message_delta`、`message_stop`、`content_block_*` | 文本、工具调用、usage、progress 都能以更细粒度被观察 |
-| Incremental tool use | 工具 JSON 参数流式拼完整后即可启动工具 | 工具不用等模型整段响应结束，降低体感延迟 |
-| StreamingToolExecutor | 给工具执行器加状态机和并发调度 | Read/Grep 等安全工具可并行，Write/Bash 等副作用工具独占执行 |
-| Ordered results | 工具可以并发跑，但结果按提交顺序回填 | 避免模型把工具 A/B 的结果顺序理解错 |
-| Sibling abort | `run_command` 失败时取消正在并行的兄弟工具 | Bash 类命令通常有隐式依赖，失败后继续执行风险更高 |
-
-```mermaid
-flowchart TD
-    user["用户输入"] --> submit["submitMessage()"]
-    submit --> stream["Streaming model events"]
-    stream --> text["message_delta<br/>实时输出文本"]
-    stream --> block["content_block_*<br/>增量工具参数"]
-    block --> ready{"JSON 参数完整?"}
-    ready -->|yes| executor["StreamingToolExecutor"]
-    executor --> queue["queued"]
-    queue --> can{"canExecuteTool?"}
-    can -->|safe 并发| executing["executing"]
-    can -->|unsafe 独占| waiting["waiting"]
-    executing --> completed["completed"]
-    completed --> yielded["yielded<br/>按提交顺序输出"]
-    yielded --> backfill["tool_result 回填"]
-    backfill --> submit
-
-    classDef process fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#082f49
-    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
-    classDef done fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
-
-    class user,submit,stream,text,block,executor,queue,executing,waiting,backfill process
-    class ready,can decision
-    class completed,yielded done
-```
-
----
-
-## 🧠 Runtime Map
+## 🧠 runtime topology
 
 ```mermaid
 flowchart TB
-    accTitle: code_agent Runtime Map
-    accDescr: A user request enters the terminal, goes through memory retrieval, graph preprocessing, model streaming, tool execution, result backfill, session persistence and memory observation.
+    accTitle: code_agent Runtime Topology
+    accDescr: The runtime receives terminal input, retrieves memory, streams model output, executes tools through a permission gate, backfills results and persists session and memory signals.
 
-    user_input([用户输入]) --> terminal["Terminal UI<br/>chat_loop"]
-    terminal --> memory_lookup["Memory retrieval<br/>相关长期记忆"]
-    memory_lookup --> graph["LangGraph run_agent"]
+    input([Terminal input]) --> memory_retrieval["memory_retrieval<br/>select relevant long-term notes"]
+    memory_retrieval --> engine["QueryEngine / StateGraph<br/>observable turn loop"]
 
-    subgraph state_graph ["StateGraph"]
-        preprocess["preprocess<br/>上下文管理 + 工具选择"]
-        api_call["api_call<br/>模型流式输出"]
-        has_tools{"tool_calls?"}
-        tool_execution["tool_execution<br/>工具校验 + 权限审查"]
-        result_backfill["result_backfill<br/>工具结果回填"]
-        finish["termination_check"]
+    subgraph turn_loop ["one agent turn"]
+        preprocess["preprocess<br/>context manager + tool search"]
+        model_stream["model stream<br/>assistant_delta + tool_call"]
+        tool_queue["StreamingToolExecutor<br/>queued / executing / yielded"]
+        permission_gate{"permission gate"}
+        tool_result["tool_result<br/>raw_result + summary"]
+        backfill["result_backfill<br/>append tool messages"]
 
-        preprocess --> api_call
-        api_call --> has_tools
-        has_tools -->|yes| tool_execution
-        tool_execution --> result_backfill
-        result_backfill --> preprocess
-        has_tools -->|no| finish
+        preprocess --> model_stream
+        model_stream --> tool_queue
+        tool_queue --> permission_gate
+        permission_gate -->|allow| tool_result
+        permission_gate -->|ask| user_confirm["interactivePrompt"]
+        user_confirm --> tool_result
+        permission_gate -->|deny| blocked["blocked result"]
+        tool_result --> backfill
+        blocked --> backfill
+        backfill --> preprocess
     end
 
-    graph --> preprocess
-    finish --> session_store["Session store<br/>SQLite messages"]
-    session_store --> memory_observer["Memory observer<br/>后台提炼长期线索"]
+    engine --> preprocess
+    backfill --> done{"no more tool calls?"}
+    done -->|yes| session_store["session store<br/>SQLite messages + title"]
+    session_store --> memory_observer["memory observer<br/>background extraction"]
+    done -->|no| preprocess
 
-    classDef terminal fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#082f49
-    classDef graph fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
-    classDef tool fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
-    classDef memory fill:#fce7f3,stroke:#db2777,stroke-width:2px,color:#831843
-    classDef done fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+    classDef input fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#082F49
+    classDef runtime fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+    classDef stream fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef gate fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    classDef memory fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef blocked fill:#FFE4E6,stroke:#E11D48,stroke-width:2px,color:#881337
 
-    class user_input,terminal terminal
-    class graph,preprocess,api_call,result_backfill graph
-    class has_tools,tool_execution tool
-    class memory_lookup,memory_observer,session_store memory
-    class finish done
+    class input input
+    class engine,preprocess,backfill,done,session_store runtime
+    class model_stream,tool_queue,tool_result stream
+    class permission_gate,user_confirm gate
+    class memory_retrieval,memory_observer memory
+    class blocked blocked
 ```
 
-## 🛡️ Permission Review
+## ⚡ streaming tool execution
 
-工具执行不是直接放行，而是按同一条安全管线处理：
+`QueryEngine` 里新增的 `StreamingToolExecutor` 让工具调用不再只是“模型输出结束后批量执行”。它会在流式事件中捕获 tool call，立刻进入队列，并把工具状态作为事件吐给 terminal。
 
-| 阶段 | 作用 |
+| Status | Meaning |
 | --- | --- |
-| `validateInput` | 按 function schema 校验必填字段、类型和枚举 |
-| `hasPermissionsToUseTool` | 读取工具权限配置，识别 `deny`、`ask`、`requires_review` |
-| `checkPermissions` | 结合上下文判断工具风险，比如命令执行、文件写入、MCP 调用 |
-| `interactivePrompt` | 风险不确定或需要确认时，把选择权交还给用户 |
+| `queued` | 工具调用已被捕获，等待执行窗口 |
+| `executing` | 工具正在通过 `tool_runner` 审查和执行 |
+| `completed` | 工具任务完成，等待按顺序回填 |
+| `yielded` | 工具结果已经回填给主 Agent |
+| `cancelled` | 兄弟 `run_command` 失败后，正在执行的 sibling 被取消 |
+
+<details>
+<summary><b>展开：并发策略</b></summary>
+
+只读、低风险、标记为 `parallel_safe` 的工具可以一起跑；写文件、删文件、命令执行、Fork/Coordinator 这类动作会串行或进入确认。这样终端体验更快，但不会把危险动作混进并发池。
+
+</details>
+
+---
+
+## 🛡️ permission gate
+
+工具执行前会走统一的安全门，而不是让模型直接碰文件、命令或外部 MCP。
+
+| Stage | What it checks | Result |
+| --- | --- | --- |
+| `validateInput` | 参数是否符合 function schema：必填字段、类型、枚举 | 不合法时 `ask` |
+| `hasPermissionsToUseTool` | 工具权限配置：`allow`、`ask`、`deny`、`requires_review` | 显式规则优先 |
+| `checkPermissions` | 当前上下文里的真实风险：命令、写入、删除、联网、MCP | 输出 risk/reason |
+| `interactivePrompt` | 用户确认本次是否允许 | terminal 决策 |
 
 <p align="center">
   <img src="./assets/permission-review-screenshot.png" alt="Permission review prompt for a run_command call" width="100%">
 </p>
 
-截图里的 `run_command` 调用在 `validateInput` 阶段被拦住：模型传入的 `command` 不是 schema 要求的数组，所以系统标记为 `ask`，展示风险、阶段和原因，再等待用户本次允许或拒绝。
+截图里的 `run_command` 被 `validateInput` 拦住：`command` 参数不是 schema 要求的数组，所以系统展示风险、阶段和原因，等待用户本次允许或拒绝。
 
-<details>
-<summary><b>展开：为什么这块重要</b></summary>
-
-Agent 做工程任务时，最危险的不是“回答错”，而是把不确定的工具动作静默执行。这个项目把参数校验、权限策略、上下文风险和用户确认放到同一条路径上，让工具执行变成可解释、可审查、可中断的行为。
-
-</details>
-
----
-
-## 🔌 Tool System
+## 🔌 tool fabric
 
 ```mermaid
 flowchart LR
-    accTitle: Tool Registry Layers
-    accDescr: Built-in tools, MCP tools and future skills tools are normalized by the registry, selected by tool search, reviewed by permission logic and executed by the tool runner.
+    accTitle: code_agent Tool Fabric
+    accDescr: Built-in local tools, MCP tools and future skills enter one registry, then tool_search chooses a small set for the current turn and tool_runner executes them with review.
 
-    built_in["Built-in tools<br/>file · command · memory · context"]
-    mcp["MCP tools<br/>stdio servers"]
-    skills["Skills tools<br/>扩展能力入口"]
-    registry["Tool registry<br/>schema · category · permission"]
-    selector["Tool search<br/>本轮只暴露相关工具"]
-    runner["Tool runner<br/>子上下文 + 并发 + 审查"]
-    result["Tool result<br/>回填给主 Agent"]
+    local_tools["agent/tools/tool<br/>file · project · command · memory · context"]
+    mcp_servers["agent/tools/mcp<br/>stdio discovery + cache"]
+    skills["agent/tools/skills<br/>future extension point"]
+    registry["registry.py<br/>schema · runner · permission · parallel_safe"]
+    search["tool_search<br/>model selector + keyword fallback + /@ MCP forcing"]
+    runner["tool_runner<br/>schema validation + short context + review"]
+    result["main agent<br/>tool result backfill"]
 
-    built_in --> registry
-    mcp --> registry
+    local_tools --> registry
+    mcp_servers --> registry
     skills --> registry
-    registry --> selector
-    selector --> runner
+    registry --> search
+    search --> runner
     runner --> result
 
-    classDef source fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#082f49
-    classDef core fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
-    classDef gate fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
-    classDef done fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+    classDef source fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#082F49
+    classDef core fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+    classDef gate fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    classDef done fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
 
-    class built_in,mcp,skills source
-    class registry,selector core
+    class local_tools,mcp_servers,skills source
+    class registry,search core
     class runner gate
     class result done
 ```
 
 <details>
-<summary><b>展开：内置工具、MCP、skills 的边界</b></summary>
+<summary><b>展开：MCP 现在怎么接入</b></summary>
 
-| 类型 | 当前角色 | 例子 |
-| --- | --- | --- |
-| 内置工具 | 项目内文件、命令、记忆、上下文等核心能力 | `read_project_file`, `run_command`, `save_memory`, `snip_context` |
-| MCP 工具 | 通过 `.mcp.json` 和 `agent/tools/mcp` 接入外部能力 | `amap-maps`, `tavily` |
-| Skills 工具 | 为后续可插拔技能预留统一入口 | `agent/tools/skills` |
-
-所有工具最终都会变成同一种 function schema，交给 `tool_runner` 统一执行。
+`agent/tools/mcp/` 会从 `.mcp.json` 发现 stdio MCP server，拉取远端 tools，注册成 `mcp__server__tool`。新增的 `cache.py` 会把工具 schema 缓存在 `.agent_data/mcp_tools_cache.json`，用配置指纹和 TTL 避免每次启动都重新发现。Terminal 里 `/@` 可以强制本轮优先使用某个 MCP server。
 
 </details>
 
 ---
 
-## 🧩 Multi-Agent Orchestration
+## 🧩 orchestration layer
 
-| 模式 | 适合什么任务 | 约束 |
+| Mode | Job | Boundary |
 | --- | --- | --- |
-| Fork | 多个互不依赖的只读调查，比如分别分析几个模块 | worker 继承主上下文，worker 之间不通信，不递归创建子 Agent |
-| Coordinator | 复杂工程任务的研究和规格生成 | 先 Research，再 Synthesis，当前不自动并发改代码 |
+| Fork | 多个独立方向并行只读调查，比如分别审查模块、比较方案、搜索证据 | worker 继承主上下文，互不通信，不递归创建子 Agent |
+| Coordinator | 复杂工程任务的 Research + Synthesis，生成实施规格 | 当前 v1 写 scratchpad，不直接并发改代码 |
 
 ```mermaid
 sequenceDiagram
-    accTitle: Fork And Coordinator
-    accDescr: The main agent can launch parallel read-only fork workers or ask a coordinator to synthesize research into an implementation specification.
+    accTitle: Fork Coordinator Orchestration
+    accDescr: The main agent can launch read-only fork workers and ask a coordinator to synthesize research into implementation specifications.
 
-    participant U as User
-    participant M as Main Agent
-    participant F as Fork Workers
-    participant C as Coordinator
-    participant S as Scratchpad
+    participant User
+    participant Main as Main Agent
+    participant Fork as Fork Workers
+    participant Coord as Coordinator
+    participant Pad as Scratchpad
 
-    U->>M: complex request
-    M->>F: parallel read-only research
-    F-->>M: findings
-    M->>C: synthesize plan
-    C->>S: write research notes and implementation spec
-    C-->>M: final spec
-    M-->>U: concise answer or next action
+    User->>Main: complex engineering request
+    Main->>Fork: launch independent read-only research
+    Fork-->>Main: module findings
+    Main->>Coord: synthesize research
+    Coord->>Pad: write notes and spec
+    Coord-->>Main: implementation specification
+    Main-->>User: concise next action
 ```
 
-## 🧱 Project Structure
+## 🧬 memory and context
+
+```mermaid
+flowchart TB
+    accTitle: Memory Context Mesh
+    accDescr: Long-term memory and context management work together so the agent keeps durable preferences while shrinking old tool-heavy context.
+
+    user_signal["durable user or project signal"] --> save_memory["save_memory<br/>explicit main-agent write"]
+    conversation["conversation end"] --> observer["memory_writer<br/>background observer"]
+    save_memory --> memory_index["memory/MEMORY.md<br/>index"]
+    observer --> memory_index
+    memory_index --> retrieval["memory_retrieval<br/>select relevant notes"]
+    retrieval --> prompt["system prompt<br/>Long-term memory section"]
+
+    big_context["large tool-heavy context"] --> manager["context_manager"]
+    manager --> snip["snip tool results"]
+    manager --> micro["micro compact"]
+    manager --> collapse["collapse / auto compact"]
+    snip --> prompt
+    micro --> prompt
+    collapse --> prompt
+
+    classDef memory fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef context fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef prompt fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
+
+    class user_signal,save_memory,conversation,observer,memory_index,retrieval memory
+    class big_context,manager,snip,micro,collapse context
+    class prompt prompt
+```
+
+## 🧱 project matrix
 
 ```text
 agent/
-  main_agent/        terminal loop, StateGraph runtime, model streaming, context manager
-  sub_agent/         tool search, tool runner, permission review, memory/session helpers
-  tools/             built-in tools, MCP bridge, skills bridge, unified registry
-  memory_system/     long-term memory store and observer
-  fork/              parallel read-only worker orchestration
-  Coordinator/       research + synthesis coordinator and scratchpad writer
-assets/              README visuals and terminal screenshots
-main.py              local entrypoint
+  main_agent/
+    query_engine.py       streaming submit_message runtime
+    graph.py              LangGraph StateGraph runtime
+    context_manager.py    snip / micro compact / collapse / auto compact
+    terminal_ui.py        terminal cockpit panels and events
+  sub_agent/
+    tool_search.py        tool selection, /@ MCP forcing, fallback rules
+    tool_runner.py        schema validation, permission merge, execution events
+    permission_review.py  risk review for commands, file writes, MCP and memory
+  tools/
+    tool/                 built-in local tools
+    mcp/                  stdio MCP discovery, registry, settings and cache
+    skills/               future skills bridge
+    registry.py           unified tool catalog
+  memory_system/          long-term memory store and observer
+  fork/                   parallel read-only worker mode
+  Coordinator/            research + synthesis planner and scratchpad writer
+assets/                   README visuals and permission screenshot
+main.py                   local entrypoint
 ```
 
-## 🚀 Quick Start
+## 🚀 quick start
 
 ```bash
 git clone https://github.com/Anorlx/code_agent.git
@@ -291,14 +261,13 @@ export DASHSCOPE_API_KEY="你的 DashScope API Key"
 python3 main.py
 ```
 
-运行后进入 `code_agent>`，你会看到模型流式输出、工具调用、权限审查、token 统计和上下文管理事件。
-
 <details>
-<summary><b>展开：一次终端事件长什么样</b></summary>
+<summary><b>展开：terminal 里会看到什么</b></summary>
 
 ```text
-state       turn=2 phase=API调用 tools read_project_file
-tool_call   read_project_file path=agent/main_agent/graph.py
+state       turn=1 phase=API调用 tools read_project_file,mcp__tavily__search
+tool_status read_project_file queued parallel_safe=true
+tool_status read_project_file executing
 review      read_project_file allow risk=low
 tool_done   read_project_file
 token       dashscope_usage in=... out=... total=...
@@ -309,12 +278,14 @@ context     micro_compact freed≈...
 
 ---
 
-## 📌 Design Principles
+## 📌 design principles
 
-| 原则 | 含义 |
+| Principle | Implementation |
 | --- | --- |
-| Local-first | 会话、记忆、日志和工具工作区默认留在本地 |
-| Observable | 主图状态、工具调用、权限审查、token 和上下文变化都在 terminal 暴露 |
-| Permission-aware | 写文件、命令执行、删除、MCP 等能力进入统一审查路径 |
-| Context-conscious | 通过 snip、micro compact、collapse、auto compact 降低长任务上下文压力 |
-| Composable | 主 Agent、子 Agent、工具、MCP、Fork、Coordinator 边界清楚，可以继续扩展 |
+| Local-first | session、memory、scratchpad、MCP cache 都在本地项目数据区 |
+| Observable by default | 每轮状态、工具状态、权限审查、token 和上下文动作都发 terminal event |
+| Permission-aware | 文件写入、删除、命令、MCP、编排工具统一进入审查路径 |
+| Streaming-first | 模型输出和工具执行可以在同一轮事件流里推进 |
+| Context-conscious | 大上下文通过 snip、compact、collapse 控制，不靠硬塞 |
+| Extensible | 内置工具、MCP、skills、Fork、Coordinator 都通过清晰边界继续扩展 |
+
