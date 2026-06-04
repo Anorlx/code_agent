@@ -37,7 +37,7 @@
 
 ## 🗓️ Week3 Day4
 
-今天优化的是启动阶段：把原本偏串行的 session 初始化、工具注册和 MCP discovery 改成“并行预取 + 缓存优先 + 后台刷新”。目标是减少从 `python main.py` 到进入 `code_agent>` 的等待时间，尤其是配置多个 MCP server 时。
+今天优化的是启动阶段：把原本偏串行的 session 初始化、工具注册和 MCP discovery 改成“并行预取 + 缓存优先 + 后台刷新”。目标是减少从 `python main.py` 到进入 `code_agent>` 的等待时间，尤其是配置多个 MCP server 时。后续打算做一些邮件发送等交互功能了....
 
 | 模块 | 今天做了什么 | 为什么重要 |
 | --- | --- | --- |
