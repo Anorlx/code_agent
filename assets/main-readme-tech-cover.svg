@@ -1,0 +1,115 @@
+<svg width="1440" height="560" viewBox="0 0 1440 560" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">code_agent cybernetic runtime cover</title>
+  <desc id="desc">A futuristic command center showing code_agent as a local-first agent runtime with streaming tools, permission review, memory, MCP cache, fork workers and coordinator planning.</desc>
+  <defs>
+    <radialGradient id="coreGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1028 238) rotate(122) scale(510 420)">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.55"/>
+      <stop offset="0.42" stop-color="#2563EB" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#020617" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="1440" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#020617"/>
+      <stop offset="0.48" stop-color="#07111F"/>
+      <stop offset="1" stop-color="#0A0E1A"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="84" y1="74" x2="1356" y2="486" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F1B2F" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#050B15" stop-opacity="0.98"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#0891B2"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#86EFAC"/>
+      <stop offset="1" stop-color="#16A34A"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FDE68A"/>
+      <stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="30" flood-color="#000000" flood-opacity="0.48"/>
+    </filter>
+    <filter id="neon" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" stroke="#1E293B" stroke-width="1" opacity="0.58"/>
+    </pattern>
+    <style>
+      .title{font:900 68px Inter,Segoe UI,Arial,sans-serif;fill:#F8FAFC;letter-spacing:0}
+      .subtitle{font:600 22px Inter,Segoe UI,Arial,sans-serif;fill:#BBD5F3;letter-spacing:0}
+      .eyebrow{font:800 14px Inter,Segoe UI,Arial,sans-serif;fill:#67E8F9;letter-spacing:2px}
+      .mono{font:700 18px SFMono-Regular,Consolas,monospace;fill:#E0F2FE}
+      .muted{font:650 13px Inter,Segoe UI,Arial,sans-serif;fill:#8EA3BB;letter-spacing:0}
+      .label{font:850 17px Inter,Segoe UI,Arial,sans-serif;fill:#F8FAFC;letter-spacing:0}
+      .tiny{font:750 12px Inter,Segoe UI,Arial,sans-serif;fill:#D7EEFF;letter-spacing:0}
+      .wire{stroke:#38BDF8;stroke-width:2.5;stroke-linecap:round;stroke-dasharray:7 10}
+      .wire2{stroke:#A78BFA;stroke-width:2.5;stroke-linecap:round;stroke-dasharray:4 9}
+    </style>
+  </defs>
+  <rect width="1440" height="560" fill="url(#bg)"/>
+  <rect width="1440" height="560" fill="url(#grid)" opacity="0.5"/>
+  <rect width="1440" height="560" fill="url(#coreGlow)"/>
+  <path d="M0 442C195 394 334 435 498 385C645 340 769 226 965 260C1128 288 1226 407 1440 362V560H0V442Z" fill="#030712" opacity="0.78"/>
+  <rect x="84" y="74" width="1272" height="412" rx="36" fill="url(#panel)" stroke="#1E3A5F" stroke-width="2" filter="url(#softShadow)"/>
+  <path d="M84 162H1356" stroke="#1E3A5F" stroke-width="1.5"/>
+  <circle cx="126" cy="118" r="8" fill="#FB7185"/>
+  <circle cx="154" cy="118" r="8" fill="#FBBF24"/>
+  <circle cx="182" cy="118" r="8" fill="#34D399"/>
+  <text x="124" y="215" class="eyebrow">LOCAL-FIRST AGENT RUNTIME</text>
+  <text x="124" y="287" class="title">code_agent</text>
+  <text x="128" y="328" class="subtitle">Streaming tools · safety gates · memory mesh · MCP cache</text>
+  <rect x="126" y="366" width="500" height="58" rx="12" fill="#020817" stroke="#1E3A5F"/>
+  <text x="154" y="402" class="mono">code_agent&gt; run guarded research loop</text>
+  <text x="128" y="454" class="muted">StateGraph telemetry / schema validation / real-time tool status / context compaction</text>
+  <g transform="translate(725 181)">
+    <circle cx="210" cy="114" r="108" stroke="#164E63" stroke-width="2"/>
+    <circle cx="210" cy="114" r="72" stroke="#2563EB" stroke-width="2" opacity="0.72"/>
+    <circle cx="210" cy="114" r="32" fill="#082F49" stroke="#67E8F9" stroke-width="2" filter="url(#neon)"/>
+    <text x="178" y="120" class="tiny">CORE</text>
+    <g>
+      <rect x="0" y="10" width="160" height="64" rx="13" fill="#071A2D" stroke="#38BDF8" stroke-width="2"/>
+      <text x="20" y="38" class="label">QueryEngine</text>
+      <text x="20" y="58" class="muted">submit_message stream</text>
+      <path class="wire" d="M160 42C186 42 186 84 210 84"/>
+    </g>
+    <g>
+      <rect x="280" y="0" width="170" height="64" rx="13" fill="#130E2A" stroke="#A78BFA" stroke-width="2"/>
+      <text x="302" y="28" class="label">Tool Executor</text>
+      <text x="302" y="48" class="muted">queued · executing · yielded</text>
+      <path class="wire2" d="M280 36C252 36 245 75 220 84"/>
+    </g>
+    <g>
+      <rect x="18" y="168" width="164" height="64" rx="13" fill="#102314" stroke="#22C55E" stroke-width="2"/>
+      <text x="40" y="196" class="label">Memory Mesh</text>
+      <text x="40" y="216" class="muted">TTL · score · observer</text>
+      <path class="wire" d="M182 198C204 198 203 152 210 146"/>
+    </g>
+    <g>
+      <rect x="300" y="164" width="170" height="64" rx="13" fill="#2A1A08" stroke="#F59E0B" stroke-width="2"/>
+      <text x="322" y="192" class="label">Permission Gate</text>
+      <text x="322" y="212" class="muted">validate · review · ask</text>
+      <path class="wire2" d="M300 194C260 194 243 152 222 146"/>
+    </g>
+    <g transform="translate(84 268)">
+      <rect x="0" y="0" width="96" height="28" rx="14" fill="url(#cyan)"/>
+      <text x="23" y="19" class="tiny">MCP</text>
+      <rect x="108" y="0" width="112" height="28" rx="14" fill="url(#violet)"/>
+      <text x="131" y="19" class="tiny">Fork</text>
+      <rect x="232" y="0" width="132" height="28" rx="14" fill="url(#green)"/>
+      <text x="251" y="19" class="tiny">Coordinator</text>
+      <rect x="376" y="0" width="98" height="28" rx="14" fill="url(#amber)"/>
+      <text x="398" y="19" class="tiny">Cache</text>
+    </g>
+  </g>
+</svg>
