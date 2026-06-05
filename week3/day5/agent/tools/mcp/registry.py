@@ -64,6 +64,44 @@ def _make_runner(server: McpServerConfig, tool_name: str) -> ToolFunc:
     return run
 
 
+def _mcp_tool_side_effectful(tool_name: str, description: str) -> bool:
+    text = f"{tool_name} {description}".lower()
+    write_markers = (
+        "create",
+        "update",
+        "delete",
+        "remove",
+        "write",
+        "save",
+        "send",
+        "post",
+        "commit",
+        "issue",
+        "pull_request",
+        "mutation",
+    )
+    read_markers = (
+        "search",
+        "query",
+        "get",
+        "list",
+        "read",
+        "fetch",
+        "find",
+        "lookup",
+        "geocode",
+        "route",
+        "weather",
+        "map",
+        "distance",
+    )
+    if any(marker in text for marker in write_markers):
+        return True
+    if any(marker in text for marker in read_markers):
+        return False
+    return True
+
+
 def _register_remote_tools(
     *,
     server_name: str,
@@ -98,6 +136,7 @@ def _register_remote_tools(
             "responsibility": description,
             "parallel_safe": False,
             "requires_review": permission == "ask",
+            "side_effectful": _mcp_tool_side_effectful(original_name, description),
             "permission": permission,
             "mcp_server": server_name,
             "mcp_tool": original_name,

@@ -15,6 +15,8 @@ _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具
   ·
   <a href="#streaming-tools"><b>Streaming tools</b></a>
   ·
+  <a href="#checkpoint-state"><b>Checkpoint</b></a>
+  ·
   <a href="#permission-gate"><b>Permission gate</b></a>
   ·
   <a href="#tool-fabric"><b>Tool fabric</b></a>
@@ -34,6 +36,10 @@ _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具
 | --- | --- | --- |
 | 内置工具、MCP、skills 进入统一 registry | 长期记忆和上下文压缩共同支撑长任务 | Fork 并行调查，Coordinator 综合实施规格 |
 
+| [Checkpoint state](#checkpoint-state) | [Session history](#session-and-memory) | [Retry recovery](#runtime-topology) |
+| --- | --- | --- |
+| 运行中断点写入 SQLite，支持启动时查看/丢弃/安全恢复 | 完整结束后的 messages 继续由 SessionStore 保存 | 瞬时模型/MCP 失败由 retry 策略恢复 |
+
 <a id="system-console"></a>
 
 ## 🧭 system console
@@ -45,52 +51,16 @@ _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具
 | Tool fabric | 内置工具、MCP 工具、skills 预留统一成 function schema | `agent/tools/registry.py`, `agent/tools/tool/`, `agent/tools/mcp/`, `agent/tools/skills/` |
 | Safety gate | schema 校验、权限规则、上下文审查、用户确认 | `agent/sub_agent/tool_runner.py`, `agent/sub_agent/permission_review.py` |
 | Context engine | snip、micro compact、collapse、auto compact，支撑长任务运行 | `agent/main_agent/context_manager.py` |
+| Checkpoint state | 当前 run 的 turn、phase、tool state 和恢复策略 | `agent/main_agent/checkpoint_store.py`, `agent/main_agent/query_engine.py` |
 | Memory mesh | 长期记忆索引、TTL、score、后台观察和检索 | `agent/memory_system/`, `agent/sub_agent/memory_retrieval.py` |
 | Orchestration | Fork worker 并行只读调查，Coordinator 生成实施规格 | `agent/fork/`, `agent/Coordinator/` |
 
 <details open>
 <summary><b>当前项目画像</b></summary>
 
-`code_agent` 已经不是“模型 + 几个工具”的 demo，而是一个正在成型的本地 Agent runtime。它把用户输入拆进可观察的事件流：模型边输出，工具边进入队列；只读工具可以并发推进，写入和命令类动作会进入权限门；MCP 工具动态发现并缓存；长任务过程中上下文会被压缩；跨会话线索由长期记忆系统维护；复杂任务可以交给 Fork 或 Coordinator 做并行研究和规格综合。
+`code_agent` 已经不是“模型 + 几个工具”的 demo，而是一个正在成型的本地 Agent runtime。它把用户输入拆进可观察的事件流：模型边输出，工具边进入队列；只读工具可以并发推进，写入和命令类动作会进入权限门；MCP 工具动态发现并缓存；长任务过程中上下文会被压缩；运行中断点由 checkpoint 保存；跨会话线索由长期记忆系统维护；复杂任务可以交给 Fork 或 Coordinator 做并行研究和规格综合。
 
 </details>
-
----
-
-## 🗓️ Week3 Day5
-
-今天补的是失败重试和瞬时故障恢复。目标不是把所有错误都硬重试，而是只处理“网络抖动、短暂超时、5xx、429、远程连接中断、冷启动过慢”这类可恢复失败。
-
-| Area | Change | Why |
-| --- | --- | --- |
-| Retry core | 新增 `agent/main_agent/retry.py`，包含 `RetryConfig`、`is_transient_error()`、`retry_async()` | 把重试策略从具体调用里抽出来，避免散落重复逻辑 |
-| Model stream | DashScope 流式请求在尚未输出任何模型事件前可自动重试 | 避免网络抖动直接导致整轮 `model_error` |
-| Stream safety | 一旦模型已经输出文本、tool call 或 token usage，就不再自动重试 | 防止重复文本、重复工具调用和重复副作用 |
-| MCP resilience | MCP `list_tools()` 和 `call_tool()` 接入 transient retry | MCP server 冷启动、网络瞬断、临时超时可以自动恢复 |
-| Terminal visibility | CLI 新增 `retry` 事件展示 | 用户能看到系统正在恢复，而不是像卡住了一样等待 |
-
-```mermaid
-flowchart TD
-    failure["transient failure"] --> classify{"is_transient_error?"}
-    classify -->|no| fail["return original error"]
-    classify -->|yes| emitted{"stream already emitted?"}
-    emitted -->|yes| fail
-    emitted -->|no| backoff["exponential backoff + jitter"]
-    backoff --> retry["retry request"]
-    retry --> ok{"success?"}
-    ok -->|yes| continue["continue streaming"]
-    ok -->|no| classify
-
-    classDef decision fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
-    classDef process fill:#DBEAFE,stroke:#2563EB,stroke-width:2px,color:#1E3A8A
-    classDef done fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
-    classDef fail fill:#FFE4E6,stroke:#E11D48,stroke-width:2px,color:#881337
-
-    class classify,emitted,ok decision
-    class failure,backoff,retry process
-    class continue done
-    class fail fail
-```
 
 ---
 
@@ -127,7 +97,9 @@ flowchart TB
     end
 
     engine --> preprocess
+    engine --> checkpoint_store["checkpoint store<br/>running turn state"]
     backfill --> done{"no more tool calls?"}
+    backfill --> checkpoint_store
     done -->|yes| session_store["session store<br/>SQLite messages + title"]
     session_store --> memory_observer["memory observer<br/>background extraction"]
     done -->|no| preprocess
@@ -140,12 +112,43 @@ flowchart TB
     classDef blocked fill:#FFE4E6,stroke:#E11D48,stroke-width:2px,color:#881337
 
     class input input
-    class engine,preprocess,backfill,done,session_store runtime
+    class engine,preprocess,backfill,done,session_store,checkpoint_store runtime
     class model_stream,tool_queue,tool_result stream
     class permission_gate,user_confirm gate
     class memory_retrieval,memory_observer memory
     class blocked blocked
 ```
+
+<a id="checkpoint-state"></a>
+
+## 🧩 checkpoint state
+
+Day5 加了运行中 checkpoint。它不是替代 session，而是补上“这一轮还没完整结束时断掉了怎么办”。
+
+| Store | Responsibility |
+| --- | --- |
+| `SessionStore` | 保存已经完整结束的会话消息和摘要 |
+| `CheckpointStore` | 保存当前 run 的 turn、phase、工具状态、半截 assistant 文本和恢复线索 |
+| `MemoryStore` | 保存跨会话仍然有价值的长期偏好、约束和项目决策 |
+
+`CheckpointStore` 使用同一个 `.agent_data/sessions.sqlite3`，新增 `run_checkpoints` 表。每次 `QueryEngine.submitMessage()` 开始都会生成 `run_id`，并在初始化、预处理、工具选择、API 调用、流式文本、tool call、tool result、结果回填和终止检查时写入断点。
+
+启动时选择 session 后，如果存在未完成 checkpoint，terminal 会显示：
+
+```text
+checkpoint  session / run_id / status / phase / updated / tool states
+选择: r=安全恢复  d=丢弃  v=查看摘要
+```
+
+恢复策略是保守的：
+
+| Phase | Recovery |
+| --- | --- |
+| 初始化 / 预处理 / 工具选择 / API 调用中 | 丢弃半截输出，重新跑当前输入 |
+| 工具结果完成 / 结果回填 | 将 checkpoint 中的 messages 回填到 SessionStore |
+| 副作用工具执行中 | 标记 `unknown_outcome`，要求用户先检查项目状态 |
+
+工具 registry 现在多了 `side_effectful` 标记。`read_file`、`grep_project`、`calculator` 这类只读工具可安全重试；`write_file`、`delete_file`、`run_command`、记忆删除/清理和外部写入类 MCP 不会自动重放。
 
 <a id="streaming-tools"></a>
 

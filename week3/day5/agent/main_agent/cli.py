@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from agent.main_agent.checkpoint_store import CheckpointRecord, CheckpointStore
 from agent.main_agent.config import SESSION_DB_PATH
 from agent.main_agent.logging_config import configure_agent_logging
 from agent.main_agent.query_engine import QueryEngine
@@ -37,6 +38,13 @@ class ToolLoadResult:
     tools: dict[str, dict[str, Any]]
     refresh_task: asyncio.Task[None] | None
     metrics: dict[str, Any]
+
+
+@dataclass
+class CheckpointStartupAction:
+    pending_input: str | None = None
+    history: list[dict[str, Any]] | None = None
+    main_agent_saved_memory: bool = False
 
 
 def _parse_arguments(arguments: Any) -> dict[str, Any]:
@@ -355,6 +363,152 @@ def _format_session_time(timestamp: float) -> str:
     return time.strftime("%m-%d %H:%M", time.localtime(timestamp))
 
 
+def _checkpoint_summary_lines(record: CheckpointRecord) -> list[str]:
+    state = record.state
+    tool_states = state.get("tool_states") or []
+    tool_calls = state.get("tool_calls") or []
+    tool_results = state.get("tool_results") or []
+    user_input = str(state.get("user_input") or "").replace("\n", " ").strip()
+    if len(user_input) > 96:
+        user_input = user_input[:95] + "."
+    risky = [
+        item
+        for item in tool_states
+        if item.get("side_effectful") and item.get("status") in {"queued", "reviewing", "waiting_user", "executing"}
+    ]
+    lines = [
+        f"session   {record.session_id}",
+        f"run_id    {record.run_id}",
+        f"status    {record.status}",
+        f"phase     {record.phase}",
+        f"turn      {record.turn}",
+        f"updated   {_format_session_time(record.updated_at)}",
+        f"input     {user_input or '(empty)'}",
+        f"tools     calls={len(tool_calls)} results={len(tool_results)} states={len(tool_states)}",
+    ]
+    if risky:
+        names = ", ".join(str(item.get("name") or "unknown") for item in risky[:4])
+        lines.append(f"risk      side-effect tool may be unfinished: {names}")
+    return lines
+
+
+def _checkpoint_has_unknown_side_effect(record: CheckpointRecord) -> bool:
+    state = record.state
+    tool_states = state.get("tool_states") or []
+    for item in tool_states:
+        if not isinstance(item, dict):
+            continue
+        if item.get("side_effectful") and item.get("status") in {"reviewing", "waiting_user", "executing"}:
+            return True
+    return False
+
+
+def _checkpoint_can_rerun(record: CheckpointRecord) -> bool:
+    if _checkpoint_has_unknown_side_effect(record):
+        return False
+    phase = str(record.phase or record.state.get("phase") or "")
+    return phase in {
+        "初始化",
+        "预处理",
+        "工具选择",
+        "API调用",
+        "API调用中",
+        "收到tool_call",
+        "终止检查",
+    }
+
+
+def _checkpoint_can_backfill(record: CheckpointRecord) -> bool:
+    phase = str(record.phase or record.state.get("phase") or "")
+    state = record.state
+    return phase in {"工具结果完成", "结果回填"} and bool(state.get("messages"))
+
+
+async def _handle_checkpoint_on_start(
+    *,
+    checkpoint_store: CheckpointStore,
+    session_store: SessionStore,
+    session_record: SessionRecord,
+    history: list[dict[str, Any]],
+    ui: TerminalUI,
+) -> CheckpointStartupAction:
+    record = await checkpoint_store.latest_unfinished(session_record.id)
+    if record is None:
+        return CheckpointStartupAction(history=history)
+
+    reader = create_terminal_input("\ncheckpoint> ")
+    while True:
+        print(
+            ui.panel(
+                [
+                    "发现一个未完成的运行断点。",
+                    "",
+                    *_checkpoint_summary_lines(record),
+                    "",
+                    "选择: r=安全恢复  d=丢弃  v=查看摘要",
+                ],
+                strong=True,
+                title="checkpoint",
+            )
+        )
+        choice = (await reader.read()).strip().lower()
+        if choice in {"v", "view", "3"}:
+            tool_states = record.state.get("tool_states") or []
+            lines = [
+                *_checkpoint_summary_lines(record),
+                "",
+                "tool states",
+            ]
+            if tool_states:
+                for item in tool_states[:12]:
+                    if not isinstance(item, dict):
+                        continue
+                    lines.append(
+                        f"- {item.get('name')} {item.get('status')} "
+                        f"side_effectful={item.get('side_effectful')}"
+                    )
+            else:
+                lines.append("- none")
+            print(ui.panel(lines, title="checkpoint summary"))
+            continue
+        if choice in {"d", "discard", "2", ""}:
+            await checkpoint_store.mark_discarded(record.run_id)
+            print(ui.event_line("checkpoint", "discarded; continue from last completed session", "yellow"))
+            return CheckpointStartupAction(history=history)
+        if choice in {"r", "recover", "1"}:
+            if _checkpoint_has_unknown_side_effect(record):
+                await checkpoint_store.mark_status(record.run_id, "unknown_outcome")
+                print(
+                    ui.event_line(
+                        "checkpoint",
+                        "side-effect tool may have partially executed; inspect project state before continuing",
+                        "red",
+                    )
+                )
+                continue
+            if _checkpoint_can_backfill(record):
+                restored_history = list(record.state.get("messages") or history)
+                await session_store.save_messages(session_record.id, restored_history)
+                await checkpoint_store.mark_completed(record.run_id)
+                print(ui.event_line("checkpoint", "backfilled completed messages into session history", "green"))
+                return CheckpointStartupAction(
+                    history=restored_history,
+                    main_agent_saved_memory=bool(record.state.get("main_agent_saved_memory")),
+                )
+            if _checkpoint_can_rerun(record):
+                user_input = str(record.state.get("user_input") or "").strip()
+                if not user_input:
+                    print(ui.event_line("checkpoint", "checkpoint has no user_input; cannot recover", "red"))
+                    continue
+                await checkpoint_store.mark_discarded(record.run_id)
+                print(ui.event_line("checkpoint", "safe phase: rerunning current input", "green"))
+                return CheckpointStartupAction(pending_input=user_input, history=history)
+            await checkpoint_store.mark_status(record.run_id, "needs_review")
+            print(ui.event_line("checkpoint", "this phase needs manual review; choose d after inspecting state", "yellow"))
+            continue
+        print(ui.event_line("hint", "请输入 r 恢复，d 丢弃，或 v 查看摘要。", "yellow"))
+
+
 async def _choose_session(store: SessionStore, ui: TerminalUI) -> tuple[SessionRecord, list[dict[str, Any]]]:
     sessions = await store.list_sessions()
     reader = create_terminal_input("\nsession> ")
@@ -590,14 +744,26 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
     ui = TerminalUI(color=color and sys.stdout.isatty())
     startup_started = time.perf_counter()
     session_store = SessionStore()
+    checkpoint_store = CheckpointStore()
     tools_task = asyncio.create_task(_load_tools(ui))
     session_setup_started = time.perf_counter()
-    await session_store.setup()
+    await asyncio.gather(session_store.setup(), checkpoint_store.setup())
+    await checkpoint_store.cleanup_old()
     session_setup_ms = int((time.perf_counter() - session_setup_started) * 1000)
     try:
         session_select_started = time.perf_counter()
         session_record, history = await _choose_session(session_store, ui)
         session_select_ms = int((time.perf_counter() - session_select_started) * 1000)
+        checkpoint_action = await _handle_checkpoint_on_start(
+            checkpoint_store=checkpoint_store,
+            session_store=session_store,
+            session_record=session_record,
+            history=history,
+            ui=ui,
+        )
+        history = checkpoint_action.history if checkpoint_action.history is not None else history
+        pending_user_input = checkpoint_action.pending_input
+        last_main_agent_saved_memory = checkpoint_action.main_agent_saved_memory
     except (EOFError, KeyboardInterrupt):
         if not tools_task.done():
             tools_task.cancel()
@@ -646,22 +812,26 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
     )
     memory_observer = MemoryObserver(model_call=dashscope_stream_chat)
     reader = create_terminal_input("\ncode_agent> ")
-    last_main_agent_saved_memory = False
     logger.info("chat_loop started max_turns=%s tools=%s", max_turns, list(tools))
     print(ui.welcome(session_record, reader.name, len(tools), max_turns))
     while True:
-        try:
-            user_input = await reader.read()
-        except (EOFError, KeyboardInterrupt):
-            print(ui.event_line("terminal", "aborted_streaming", "red"))
-            await _shutdown_background_tasks(
-                memory_observer,
-                summary_tasks,
-                history,
-                last_main_agent_saved_memory,
-            )
-            logger.info("chat_loop aborted while reading input")
-            return
+        if pending_user_input is not None:
+            user_input = pending_user_input
+            pending_user_input = None
+            print(ui.event_line("checkpoint", f"recovering input: {user_input[:120]}", "green"))
+        else:
+            try:
+                user_input = await reader.read()
+            except (EOFError, KeyboardInterrupt):
+                print(ui.event_line("terminal", "aborted_streaming", "red"))
+                await _shutdown_background_tasks(
+                    memory_observer,
+                    summary_tasks,
+                    history,
+                    last_main_agent_saved_memory,
+                )
+                logger.info("chat_loop aborted while reading input")
+                return
         if user_input.lower() in {"exit", "quit"}:
             await _shutdown_background_tasks(
                 memory_observer,
@@ -714,6 +884,8 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
             tool_selector=_selector,
             permission_reviewer=_permission_reviewer,
             permission_prompter=_make_permission_prompter(ui),
+            checkpoint_store=checkpoint_store,
+            session_id=session_record.id,
             max_turns=max_turns,
         )
         last_state = None
