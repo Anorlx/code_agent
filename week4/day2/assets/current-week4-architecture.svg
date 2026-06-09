@@ -1,0 +1,155 @@
+<svg width="1680" height="1120" viewBox="0 0 1680 1120" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f6f8fb; }
+      .title { font: 800 36px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #172033; }
+      .subtitle { font: 500 18px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #64748b; }
+      .layer-title { font: 800 20px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #223149; }
+      .node-title { font: 800 17px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #172033; }
+      .node-text { font: 500 13.5px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #5b6b82; }
+      .tag { font: 800 12px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #fff; }
+      .small { font: 600 12.5px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #64748b; }
+      .layer { fill: #ffffff; stroke: #d7e0ec; stroke-width: 1.4; rx: 24; }
+      .node { fill: #ffffff; stroke: #cbd7e5; stroke-width: 1.4; rx: 15; }
+      .main { fill: #eef7ff; stroke: #4f9de5; stroke-width: 2; rx: 15; }
+      .sub { fill: #f0fbf4; stroke: #49b36d; stroke-width: 2; rx: 15; }
+      .tool { fill: #fff8eb; stroke: #df9d2f; stroke-width: 2; rx: 15; }
+      .store { fill: #f8f1ff; stroke: #9d74d2; stroke-width: 2; rx: 15; }
+      .model { fill: #f1f5f9; stroke: #8ba0b8; stroke-width: 2; rx: 15; }
+      .arrow { fill: none; stroke: #64748b; stroke-width: 2.4; marker-end: url(#arrow); }
+      .arrow-main { fill: none; stroke: #2f7fc1; stroke-width: 3; marker-end: url(#arrowMain); }
+      .arrow-light { fill: none; stroke: #a2afc0; stroke-width: 1.8; marker-end: url(#arrowLight); }
+      .dash { stroke-dasharray: 7 8; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.3" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowMain" viewBox="0 0 10 10" refX="8.3" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f7fc1"/>
+    </marker>
+    <marker id="arrowLight" viewBox="0 0 10 10" refX="8.3" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a2afc0"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-15%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#172033" flood-opacity="0.09"/>
+    </filter>
+  </defs>
+
+  <rect class="bg" width="1680" height="1120"/>
+
+  <text class="title" x="68" y="72">real_agent / Pico 架构图</text>
+  <text class="subtitle" x="68" y="104">最新完整源码视角：/Users/aoligei/Desktop/real_agent/week4/day1</text>
+
+  <rect x="68" y="134" width="1544" height="84" rx="22" fill="#172033" filter="url(#shadow)"/>
+  <text x="100" y="170" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" font-size="22" font-weight="800" fill="#ffffff">整体定位</text>
+  <text x="100" y="199" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" font-size="16.5" font-weight="500" fill="#dbe7f7">一个本地代码 Agent Harness：CLI 负责交互，LangGraph 负责编排，Sub Agent 负责路由/选择/审查/记忆，Tool Runtime 负责安全执行，SQLite + Markdown 负责状态与记忆落盘。</text>
+
+  <rect class="layer" x="68" y="260" width="1544" height="112"/>
+  <text class="layer-title" x="100" y="296">1. 入口与启动</text>
+  <rect class="main" x="292" y="286" width="210" height="62"/>
+  <text class="node-title" x="316" y="311">main.py</text>
+  <text class="node-text" x="316" y="334">python main.py</text>
+  <rect class="main" x="562" y="286" width="250" height="62"/>
+  <text class="node-title" x="586" y="311">cli.py / chat_loop</text>
+  <text class="node-text" x="586" y="334">启动会话、工具、UI、日志</text>
+  <rect class="node" x="872" y="286" width="270" height="62"/>
+  <text class="node-title" x="896" y="311">Startup Loader</text>
+  <text class="node-text" x="896" y="334">本地工具 + MCP 缓存/刷新</text>
+  <rect class="store" x="1202" y="286" width="260" height="62"/>
+  <text class="node-title" x="1226" y="311">Session / Checkpoint</text>
+  <text class="node-text" x="1226" y="334">启动时检查历史与恢复点</text>
+
+  <rect class="layer" x="68" y="412" width="1544" height="150"/>
+  <text class="layer-title" x="100" y="448">2. 每轮用户请求进入主 Agent</text>
+  <rect class="sub" x="292" y="462" width="250" height="72"/>
+  <text class="node-title" x="316" y="489">Memory Retrieval</text>
+  <text class="node-text" x="316" y="512">按问题从 MEMORY.md 选择相关记忆</text>
+  <rect class="main" x="602" y="462" width="250" height="72"/>
+  <text class="node-title" x="626" y="489">QueryEngine</text>
+  <text class="node-text" x="626" y="512">submitMessage 包装 run_agent</text>
+  <rect class="main" x="912" y="462" width="250" height="72"/>
+  <text class="node-title" x="936" y="489">LangGraph StateGraph</text>
+  <text class="node-text" x="936" y="512">主状态机和事件流出口</text>
+  <rect class="model" x="1222" y="462" width="250" height="72"/>
+  <text class="node-title" x="1246" y="489">State Object</text>
+  <text class="node-text" x="1246" y="512">messages / tools / memory / run_id</text>
+
+  <rect class="layer" x="68" y="602" width="1544" height="190"/>
+  <text class="layer-title" x="100" y="638">3. LangGraph 主循环</text>
+  <rect class="main" x="182" y="666" width="218" height="82"/>
+  <text class="node-title" x="206" y="694">preprocess</text>
+  <text class="node-text" x="206" y="718">上下文压缩</text>
+  <text class="node-text" x="206" y="738">模式路由 + 工具选择</text>
+  <rect class="main" x="462" y="666" width="218" height="82"/>
+  <text class="node-title" x="486" y="694">api_call</text>
+  <text class="node-text" x="486" y="718">DashScope 流式响应</text>
+  <text class="node-text" x="486" y="738">检测 tool_call</text>
+  <rect class="tool" x="742" y="666" width="218" height="82"/>
+  <text class="node-title" x="766" y="694">tool_execute</text>
+  <text class="node-text" x="766" y="718">即时提交工具</text>
+  <text class="node-text" x="766" y="738">并发但顺序回填</text>
+  <rect class="main" x="1022" y="666" width="218" height="82"/>
+  <text class="node-title" x="1046" y="694">result_backfill</text>
+  <text class="node-text" x="1046" y="718">工具结果进入 messages</text>
+  <text class="node-text" x="1046" y="738">snip_context 清理</text>
+  <rect class="main" x="1302" y="666" width="218" height="82"/>
+  <text class="node-title" x="1326" y="694">verify / terminate</text>
+  <text class="node-text" x="1326" y="718">副作用验证</text>
+  <text class="node-text" x="1326" y="738">继续循环或完成</text>
+
+  <rect class="layer" x="68" y="832" width="1544" height="150"/>
+  <text class="layer-title" x="100" y="868">4. 能力层</text>
+  <rect class="sub" x="174" y="892" width="246" height="64"/>
+  <text class="node-title" x="198" y="918">Sub Agents</text>
+  <text class="node-text" x="198" y="941">mode_router / tool_search / review / memory_writer</text>
+  <rect class="tool" x="480" y="892" width="246" height="64"/>
+  <text class="node-title" x="504" y="918">Local Tools</text>
+  <text class="node-text" x="504" y="941">read/write/grep/run/calc/time/memory</text>
+  <rect class="tool" x="786" y="892" width="246" height="64"/>
+  <text class="node-title" x="810" y="918">MCP Tools</text>
+  <text class="node-text" x="810" y="941">.mcp.json 注册成 mcp__server__tool</text>
+  <rect class="sub" x="1092" y="892" width="246" height="64"/>
+  <text class="node-title" x="1116" y="918">Fork / Coordinator</text>
+  <text class="node-text" x="1116" y="941">并行调查 / Research + Synthesis</text>
+  <rect class="model" x="1398" y="892" width="150" height="64"/>
+  <text class="node-title" x="1422" y="918">Models</text>
+  <text class="node-text" x="1422" y="941">glm-5 / qwen</text>
+
+  <rect class="store" x="68" y="1012" width="1544" height="64"/>
+  <text class="node-title" x="100" y="1040">持久化与审计</text>
+  <text class="node-text" x="236" y="1040">SQLite: sessions / session_messages / run_checkpoints</text>
+  <text class="node-text" x="636" y="1040">Markdown Memory: MEMORY.md + memory/*.md</text>
+  <text class="node-text" x="1034" y="1040">Artifacts: logs/agent.log + MCP cache + coordinator scratchpad</text>
+
+  <path class="arrow-main" d="M 502 317 L 562 317"/>
+  <path class="arrow-main" d="M 812 317 L 872 317"/>
+  <path class="arrow-light" d="M 1142 317 L 1202 317"/>
+
+  <path class="arrow-main" d="M 542 498 L 602 498"/>
+  <path class="arrow-main" d="M 852 498 L 912 498"/>
+  <path class="arrow-light" d="M 1162 498 L 1222 498"/>
+
+  <path class="arrow-main" d="M 400 707 L 462 707"/>
+  <path class="arrow-main" d="M 680 707 L 742 707"/>
+  <path class="arrow-main" d="M 960 707 L 1022 707"/>
+  <path class="arrow-main" d="M 1240 707 L 1302 707"/>
+  <path class="arrow dash" d="M 1411 748 C 1411 790 291 790 291 748"/>
+
+  <path class="arrow-light" d="M 417 534 C 417 585 291 601 291 666"/>
+  <path class="arrow-light" d="M 1472 534 C 1472 585 1411 601 1411 666"/>
+  <path class="arrow-light" d="M 851 748 C 851 820 603 820 603 892"/>
+  <path class="arrow-light" d="M 851 748 C 851 820 909 820 909 892"/>
+  <path class="arrow-light" d="M 291 666 C 291 620 297 608 297 534"/>
+  <path class="arrow-light" d="M 1411 748 C 1411 828 1473 820 1473 892"/>
+
+  <rect x="100" y="230" width="148" height="28" rx="14" fill="#2f7fc1"/>
+  <text class="tag" x="123" y="249">主干链路</text>
+  <rect x="262" y="230" width="148" height="28" rx="14" fill="#49b36d"/>
+  <text class="tag" x="286" y="249">子 Agent</text>
+  <rect x="424" y="230" width="148" height="28" rx="14" fill="#df9d2f"/>
+  <text class="tag" x="448" y="249">工具系统</text>
+  <rect x="586" y="230" width="148" height="28" rx="14" fill="#9d74d2"/>
+  <text class="tag" x="610" y="249">持久化</text>
+
+  <text class="small" x="1260" y="250">说明：为保证清晰，只画核心模块边界和主数据流，不画每个函数之间的细依赖。</text>
+</svg>

@@ -1,0 +1,229 @@
+<svg width="1720" height="1320" viewBox="0 0 1720 1320" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f7f9fc; }
+      .title { font: 800 38px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #172033; }
+      .subtitle { font: 500 18px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #64748b; }
+      .section { font: 800 18px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #27364d; }
+      .node-title { font: 800 16px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #172033; }
+      .node-text { font: 500 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #5b6b82; }
+      .tiny { font: 600 12px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #64748b; }
+      .tag { font: 800 11.5px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #ffffff; }
+      .lane { fill: #ffffff; stroke: #d7e0ec; stroke-width: 1.4; rx: 24; }
+      .start { fill: #eef7ff; stroke: #3b8fd8; stroke-width: 2; rx: 16; }
+      .main { fill: #ffffff; stroke: #bfcde0; stroke-width: 1.6; rx: 16; }
+      .agent { fill: #eef7ff; stroke: #3b8fd8; stroke-width: 2; rx: 16; }
+      .sub { fill: #f0fbf4; stroke: #48ad69; stroke-width: 2; rx: 16; }
+      .tool { fill: #fff7e8; stroke: #dc982c; stroke-width: 2; rx: 16; }
+      .store { fill: #f8f1ff; stroke: #9870cc; stroke-width: 2; rx: 16; }
+      .end { fill: #fff1f1; stroke: #e06767; stroke-width: 2; rx: 16; }
+      .decision { fill: #fffdf4; stroke: #d99b23; stroke-width: 2; }
+      .arrow { fill: none; stroke: #65758a; stroke-width: 2.3; marker-end: url(#arrow); }
+      .arrow-main { fill: none; stroke: #2778bd; stroke-width: 3; marker-end: url(#arrowMain); }
+      .arrow-loop { fill: none; stroke: #48ad69; stroke-width: 3; marker-end: url(#arrowLoop); stroke-dasharray: 8 8; }
+      .arrow-soft { fill: none; stroke: #a5b1c2; stroke-width: 1.8; marker-end: url(#arrowSoft); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#65758a"/>
+    </marker>
+    <marker id="arrowMain" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2778bd"/>
+    </marker>
+    <marker id="arrowLoop" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#48ad69"/>
+    </marker>
+    <marker id="arrowSoft" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a5b1c2"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-15%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#172033" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <rect class="bg" width="1720" height="1320"/>
+  <text class="title" x="70" y="74">Agent 全体运行流程</text>
+  <text class="subtitle" x="70" y="106">从 python main.py 启动，到单轮用户输入、LangGraph 内部循环、工具执行、验证、状态落盘和后台记忆抽取</text>
+
+  <rect x="70" y="136" width="1580" height="72" rx="22" fill="#172033" filter="url(#shadow)"/>
+  <text x="104" y="178" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" font-size="19" font-weight="700" fill="#ffffff">
+    核心形态：外层是 CLI 会话 while 循环；内层是 LangGraph ReAct 循环。模型没有工具调用时完成；有工具调用时执行工具、回填结果、验证，再回到 preprocess。
+  </text>
+
+  <rect class="lane" x="70" y="250" width="330" height="902"/>
+  <text class="section" x="100" y="286">A. 启动与外层会话</text>
+
+  <rect class="lane" x="448" y="250" width="824" height="902"/>
+  <text class="section" x="478" y="286">B. LangGraph 主循环</text>
+
+  <rect class="lane" x="1320" y="250" width="330" height="902"/>
+  <text class="section" x="1350" y="286">C. 工具 / 存储 / 后台任务</text>
+
+  <rect class="start" x="112" y="326" width="246" height="68"/>
+  <text class="node-title" x="138" y="354">python main.py</text>
+  <text class="node-text" x="138" y="377">进入 cli.main() / chat_loop()</text>
+
+  <rect class="main" x="112" y="430" width="246" height="88"/>
+  <text class="node-title" x="138" y="459">初始化运行环境</text>
+  <text class="node-text" x="138" y="482">TerminalUI / logging</text>
+  <text class="node-text" x="138" y="502">SessionStore / CheckpointStore</text>
+
+  <rect class="main" x="112" y="554" width="246" height="88"/>
+  <text class="node-title" x="138" y="583">加载工具</text>
+  <text class="node-text" x="138" y="606">本地工具 registry</text>
+  <text class="node-text" x="138" y="626">MCP cache 命中则后台刷新</text>
+
+  <rect class="store" x="112" y="678" width="246" height="88"/>
+  <text class="node-title" x="138" y="707">选择 / 恢复会话</text>
+  <text class="node-text" x="138" y="730">读取 session history</text>
+  <text class="node-text" x="138" y="750">检查 unfinished checkpoint</text>
+
+  <rect class="main" x="112" y="802" width="246" height="88"/>
+  <text class="node-title" x="138" y="831">等待用户输入</text>
+  <text class="node-text" x="138" y="854">普通问题 / /@MCP / /help</text>
+  <text class="node-text" x="138" y="874">exit / quit 结束外层循环</text>
+
+  <rect class="sub" x="112" y="926" width="246" height="88"/>
+  <text class="node-title" x="138" y="955">记忆召回</text>
+  <text class="node-text" x="138" y="978">memory_retrieval 子 Agent</text>
+  <text class="node-text" x="138" y="998">选择相关 memory/*.md 注入</text>
+
+  <rect class="agent" x="494" y="326" width="220" height="78"/>
+  <text class="node-title" x="520" y="356">构造初始 State</text>
+  <text class="node-text" x="520" y="379">messages + tools + memory</text>
+
+  <rect class="agent" x="770" y="326" width="220" height="78"/>
+  <text class="node-title" x="796" y="356">preprocess</text>
+  <text class="node-text" x="796" y="379">turn + 1 / checkpoint</text>
+
+  <rect class="decision" x="1032" y="328" width="156" height="74" transform="rotate(45 1110 365)"/>
+  <text class="node-title" x="1074" y="360">超限?</text>
+  <text class="node-text" x="1064" y="381">max/token</text>
+
+  <rect class="agent" x="494" y="468" width="220" height="92"/>
+  <text class="node-title" x="520" y="498">上下文治理</text>
+  <text class="node-text" x="520" y="521">manage_context()</text>
+  <text class="node-text" x="520" y="541">micro / collapse / auto</text>
+
+  <rect class="sub" x="770" y="468" width="220" height="92"/>
+  <text class="node-title" x="796" y="498">模式路由</text>
+  <text class="node-text" x="796" y="521">mode_router 子 Agent</text>
+  <text class="node-text" x="796" y="541">chat / tools / fork / coordinator</text>
+
+  <rect class="sub" x="1036" y="468" width="190" height="92"/>
+  <text class="node-title" x="1062" y="498">工具选择</text>
+  <text class="node-text" x="1062" y="521">tool_search</text>
+  <text class="node-text" x="1062" y="541">或构造 planned call</text>
+
+  <rect class="agent" x="494" y="624" width="220" height="92"/>
+  <text class="node-title" x="520" y="654">api_call</text>
+  <text class="node-text" x="520" y="677">只把 selected tools</text>
+  <text class="node-text" x="520" y="697">schema 交给主模型</text>
+
+  <rect class="agent" x="770" y="624" width="220" height="92"/>
+  <text class="node-title" x="796" y="654">流式模型响应</text>
+  <text class="node-text" x="796" y="677">assistant_delta 实时给 UI</text>
+  <text class="node-text" x="796" y="697">token_usage 实时记录</text>
+
+  <rect class="decision" x="1042" y="630" width="136" height="136" transform="rotate(45 1110 698)"/>
+  <text class="node-title" x="1074" y="692">有工具?</text>
+  <text class="node-text" x="1074" y="714">tool_call</text>
+
+  <rect class="tool" x="494" y="800" width="220" height="92"/>
+  <text class="node-title" x="520" y="830">tool_execute</text>
+  <text class="node-text" x="520" y="853">StreamingToolExecutor</text>
+  <text class="node-text" x="520" y="873">边流式边提交工具</text>
+
+  <rect class="agent" x="770" y="800" width="220" height="92"/>
+  <text class="node-title" x="796" y="830">result_backfill</text>
+  <text class="node-text" x="796" y="853">assistant + tool results</text>
+  <text class="node-text" x="796" y="873">写回 messages</text>
+
+  <rect class="agent" x="1036" y="800" width="190" height="92"/>
+  <text class="node-title" x="1062" y="830">verify</text>
+  <text class="node-text" x="1062" y="853">run_verifier()</text>
+  <text class="node-text" x="1062" y="873">必要时追加验证结果</text>
+
+  <rect class="end" x="770" y="972" width="220" height="82"/>
+  <text class="node-title" x="796" y="1003">termination_check</text>
+  <text class="node-text" x="796" y="1026">无工具调用时 completed</text>
+
+  <rect class="tool" x="1362" y="326" width="246" height="92"/>
+  <text class="node-title" x="1388" y="356">工具执行管线</text>
+  <text class="node-text" x="1388" y="379">validate schema</text>
+  <text class="node-text" x="1388" y="399">permission review / prompt</text>
+
+  <rect class="tool" x="1362" y="454" width="246" height="110"/>
+  <text class="node-title" x="1388" y="484">具体工具</text>
+  <text class="node-text" x="1388" y="507">Local: 文件 / grep / run / calc</text>
+  <text class="node-text" x="1388" y="527">Memory: save / delete / prune</text>
+  <text class="node-text" x="1388" y="547">MCP: mcp__server__tool</text>
+
+  <rect class="sub" x="1362" y="600" width="246" height="98"/>
+  <text class="node-title" x="1388" y="630">编排型工具</text>
+  <text class="node-text" x="1388" y="653">fork_tasks: 并行只读 worker</text>
+  <text class="node-text" x="1388" y="673">coordinator_plan: 研究 + 综合</text>
+
+  <rect class="store" x="1362" y="734" width="246" height="98"/>
+  <text class="node-title" x="1388" y="764">运行状态落盘</text>
+  <text class="node-text" x="1388" y="787">run_checkpoints</text>
+  <text class="node-text" x="1388" y="807">stream 中也周期性保存</text>
+
+  <rect class="store" x="1362" y="868" width="246" height="98"/>
+  <text class="node-title" x="1388" y="898">回合结束落盘</text>
+  <text class="node-text" x="1388" y="921">save_messages()</text>
+  <text class="node-text" x="1388" y="941">session summary 后台更新</text>
+
+  <rect class="sub" x="1362" y="1002" width="246" height="98"/>
+  <text class="node-title" x="1388" y="1032">长期记忆抽取</text>
+  <text class="node-text" x="1388" y="1055">MemoryObserver.flush()</text>
+  <text class="node-text" x="1388" y="1075">memory_writer 写 memory/*.md</text>
+
+  <rect class="end" x="70" y="1192" width="1580" height="74"/>
+  <text class="node-title" x="100" y="1222">终止原因集合</text>
+  <text class="node-text" x="100" y="1248">completed / aborted_streaming / aborted_tools / max_turns / blocking_limit / prompt_too_long / model_error / stop_hook_prevented / hook_stopped / image_error</text>
+
+  <path class="arrow-main" d="M 235 394 L 235 430"/>
+  <path class="arrow-main" d="M 235 518 L 235 554"/>
+  <path class="arrow-main" d="M 235 642 L 235 678"/>
+  <path class="arrow-main" d="M 235 766 L 235 802"/>
+  <path class="arrow-main" d="M 235 890 L 235 926"/>
+  <path class="arrow-main" d="M 358 970 C 414 970 414 365 494 365"/>
+
+  <path class="arrow-main" d="M 714 365 L 770 365"/>
+  <path class="arrow-main" d="M 990 365 L 1034 365"/>
+  <path class="arrow" d="M 1110 443 C 1110 462 880 445 880 468"/>
+  <path class="arrow-main" d="M 604 404 C 604 430 604 442 604 468"/>
+  <path class="arrow-main" d="M 714 514 L 770 514"/>
+  <path class="arrow-main" d="M 990 514 L 1036 514"/>
+  <path class="arrow-main" d="M 1131 560 C 1131 604 604 584 604 624"/>
+  <path class="arrow-main" d="M 714 670 L 770 670"/>
+  <path class="arrow-main" d="M 990 670 L 1042 698"/>
+
+  <path class="arrow-main" d="M 1110 766 C 1110 846 760 846 714 846"/>
+  <path class="arrow-main" d="M 714 846 L 770 846"/>
+  <path class="arrow-main" d="M 990 846 L 1036 846"/>
+  <path class="arrow-loop" d="M 1131 892 C 1131 930 458 930 458 365 C 458 342 474 326 494 326"/>
+  <path class="arrow-main" d="M 1110 766 C 1110 1013 990 1013 990 1013"/>
+  <path class="arrow-main" d="M 880 972 L 880 892"/>
+
+  <path class="arrow" d="M 714 846 C 1010 846 1060 372 1362 372"/>
+  <path class="arrow" d="M 1485 418 L 1485 454"/>
+  <path class="arrow" d="M 1485 564 L 1485 600"/>
+  <path class="arrow" d="M 1485 698 L 1485 734"/>
+  <path class="arrow-soft" d="M 1226 846 C 1288 846 1288 783 1362 783"/>
+  <path class="arrow-soft" d="M 990 1013 C 1160 1013 1210 917 1362 917"/>
+  <path class="arrow-soft" d="M 1485 966 L 1485 1002"/>
+
+  <path class="arrow-soft" d="M 358 598 C 580 598 1140 598 1362 783"/>
+  <path class="arrow-soft" d="M 358 722 C 600 722 1110 734 1362 783"/>
+  <path class="arrow-soft" d="M 990 1013 C 1170 1013 1220 1051 1362 1051"/>
+
+  <rect x="70" y="220" width="128" height="28" rx="14" fill="#2778bd"/>
+  <text class="tag" x="96" y="239">主流程</text>
+  <rect x="214" y="220" width="128" height="28" rx="14" fill="#48ad69"/>
+  <text class="tag" x="239" y="239">内部循环</text>
+  <rect x="358" y="220" width="128" height="28" rx="14" fill="#dc982c"/>
+  <text class="tag" x="383" y="239">工具执行</text>
+  <rect x="502" y="220" width="128" height="28" rx="14" fill="#9870cc"/>
+  <text class="tag" x="527" y="239">状态落盘</text>
+</svg>
