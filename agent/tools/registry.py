@@ -1,0 +1,363 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+from agent.Coordinator.tool import coordinator_plan, coordinator_plan_spec
+from agent.fork.tool import fork_tasks, fork_tasks_spec
+from agent.main_agent.config import DEFAULT_TOOL_WORKSPACE, PROJECT_ROOT
+from agent.main_agent.prompt_cache import canonicalize
+from agent.tools.mcp.config import mcp_servers_catalog
+from agent.tools.skills.registry import load_skill_registry, make_skill_runner, skill_catalog_text, skill_tool_spec
+from agent.tools.tool.calculator import calculator, calculator_spec
+from agent.tools.tool.command import run_command, run_command_spec
+from agent.tools.tool.context_tools import snip_context, snip_context_spec
+from agent.tools.tool.discovery import tool_search, tool_search_spec
+from agent.tools.tool.filesystem import (
+    delete_file,
+    delete_file_spec,
+    list_dir,
+    list_dir_spec,
+    read_file,
+    read_file_spec,
+    write_file,
+    write_file_spec,
+)
+from agent.tools.tool.memory_tools import (
+    delete_memory,
+    delete_memory_spec,
+    prune_memories,
+    prune_memories_spec,
+    save_memory,
+    save_memory_spec,
+)
+from agent.tools.tool.project import (
+    edit_file,
+    edit_file_spec,
+    file_info,
+    file_info_spec,
+    glob_project,
+    glob_project_spec,
+    grep_project,
+    grep_project_spec,
+    ls_project,
+    ls_project_spec,
+    read_many_files,
+    read_many_files_spec,
+    read_project_file,
+    read_project_file_spec,
+)
+from agent.tools.tool.time_tool import current_time, current_time_spec
+from agent.tools.tool.todo import todo_write, todo_write_spec
+
+ToolFunc = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+TOOL_CATALOG_PATH = Path(__file__).with_name("README.md")
+ALWAYS_LOAD_TOOL_NAMES = {
+    "tool_search",
+    "read_project_file",
+    "grep_project",
+    "glob_project",
+    "ls_project",
+    "file_info",
+    "calculator",
+    "current_time",
+}
+
+
+def _with_workspace(func: Callable[..., Awaitable[dict[str, Any]]], root: Path) -> ToolFunc:
+    async def run(arguments: dict[str, Any]) -> dict[str, Any]:
+        return await func(arguments, workspace_root=root)
+
+    return run
+
+
+def _with_project(func: Callable[..., Awaitable[dict[str, Any]]], root: Path) -> ToolFunc:
+    async def run(arguments: dict[str, Any]) -> dict[str, Any]:
+        return await func(arguments, project_root=root)
+
+    return run
+
+
+def get_tool_registry(workspace_root: Path | None = None) -> dict[str, dict[str, Any]]:
+    root = (workspace_root or PROJECT_ROOT).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    project_root = PROJECT_ROOT.resolve()
+    tools = {
+        "tool_search": {
+            "spec": tool_search_spec(),
+            "run": tool_search,
+            "category": "发现",
+            "responsibility": "根据当前任务从完整工具目录中发现需要延迟加载的工具",
+            "parallel_safe": True,
+            "accepts_runtime_context": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "read_file": {
+            "spec": read_file_spec(),
+            "run": _with_workspace(read_file, root),
+            "category": "文件",
+            "responsibility": "读取当前项目内的文本文件",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "lazy",
+        },
+        "write_file": {
+            "spec": write_file_spec(),
+            "run": _with_workspace(write_file, root),
+            "category": "文件",
+            "responsibility": "写入当前项目内的文本文件",
+            "parallel_safe": False,
+            "requires_review": True,
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "delete_file": {
+            "spec": delete_file_spec(),
+            "run": _with_workspace(delete_file, root),
+            "category": "文件",
+            "responsibility": "删除当前项目内的文件",
+            "parallel_safe": False,
+            "requires_review": True,
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "list_dir": {
+            "spec": list_dir_spec(),
+            "run": _with_workspace(list_dir, root),
+            "category": "文件",
+            "responsibility": "列出当前项目内目录",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "lazy",
+        },
+        "ls_project": {
+            "spec": ls_project_spec(),
+            "run": _with_project(ls_project, project_root),
+            "category": "搜索",
+            "responsibility": "列出当前项目目录结构",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "grep_project": {
+            "spec": grep_project_spec(),
+            "run": _with_project(grep_project, project_root),
+            "category": "搜索",
+            "responsibility": "在当前项目内搜索文本",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "glob_project": {
+            "spec": glob_project_spec(),
+            "run": _with_project(glob_project, project_root),
+            "category": "搜索",
+            "responsibility": "按 glob 文件名模式查找当前项目内文件",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "read_project_file": {
+            "spec": read_project_file_spec(),
+            "run": _with_project(read_project_file, project_root),
+            "category": "文件",
+            "responsibility": "读取当前项目内的文本文件",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "read_many_files": {
+            "spec": read_many_files_spec(),
+            "run": _with_project(read_many_files, project_root),
+            "category": "文件",
+            "responsibility": "一次读取多个项目内文本文件",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "lazy",
+        },
+        "file_info": {
+            "spec": file_info_spec(),
+            "run": _with_project(file_info, project_root),
+            "category": "文件",
+            "responsibility": "查看项目内文件或目录的元信息",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "edit_file": {
+            "spec": edit_file_spec(),
+            "run": _with_project(edit_file, project_root),
+            "category": "文件",
+            "responsibility": "在当前项目内对文本文件做精确字符串替换",
+            "parallel_safe": False,
+            "requires_review": True,
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "calculator": {
+            "spec": calculator_spec(),
+            "run": calculator,
+            "category": "执行",
+            "responsibility": "安全计算四则运算表达式",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "current_time": {
+            "spec": current_time_spec(),
+            "run": current_time,
+            "category": "执行",
+            "responsibility": "获取指定时区当前时间",
+            "parallel_safe": True,
+            "side_effectful": False,
+            "exposure": "always",
+        },
+        "run_command": {
+            "spec": run_command_spec(),
+            "run": _with_project(run_command, project_root),
+            "category": "执行",
+            "responsibility": "在当前项目内本地运行命令或测试",
+            "parallel_safe": False,
+            "requires_review": True,
+            "permission": "ask",
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "save_memory": {
+            "spec": save_memory_spec(),
+            "run": save_memory,
+            "category": "记忆",
+            "responsibility": "保存长期记忆到 memory 目录并更新 MEMORY.md",
+            "parallel_safe": False,
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "delete_memory": {
+            "spec": delete_memory_spec(),
+            "run": delete_memory,
+            "category": "记忆",
+            "responsibility": "显式删除一条长期记忆并更新 MEMORY.md",
+            "parallel_safe": False,
+            "requires_review": True,
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "prune_memories": {
+            "spec": prune_memories_spec(),
+            "run": prune_memories,
+            "category": "记忆",
+            "responsibility": "按 TTL、使用频率和显著性衰减清理长期记忆",
+            "parallel_safe": False,
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "snip_context": {
+            "spec": snip_context_spec(),
+            "run": snip_context,
+            "category": "上下文",
+            "responsibility": "标记旧工具结果可被清理，释放上下文空间",
+            "parallel_safe": False,
+            "side_effectful": False,
+            "exposure": "lazy",
+        },
+        "todo_write": {
+            "spec": todo_write_spec(),
+            "run": todo_write,
+            "category": "任务",
+            "responsibility": "写入或更新当前任务的 todo 列表",
+            "parallel_safe": False,
+            "requires_review": True,
+            "accepts_runtime_context": True,
+            "side_effectful": True,
+            "exposure": "lazy",
+        },
+        "fork_tasks": {
+            "spec": fork_tasks_spec(),
+            "run": fork_tasks,
+            "category": "编排",
+            "responsibility": "并行运行多个只读 Fork worker，适合独立调查和多方向分析",
+            "parallel_safe": False,
+            "requires_review": True,
+            "accepts_runtime_context": True,
+            "side_effectful": False,
+            "exposure": "lazy",
+        },
+        "coordinator_plan": {
+            "spec": coordinator_plan_spec(),
+            "run": coordinator_plan,
+            "category": "编排",
+            "responsibility": "按 Coordinator 模式执行 Research + Synthesis，并生成实施规格",
+            "parallel_safe": False,
+            "requires_review": True,
+            "accepts_runtime_context": True,
+            "side_effectful": False,
+            "exposure": "lazy",
+        },
+    }
+    for skill in load_skill_registry().values():
+        if not skill.user_invocable:
+            continue
+        tools[skill.tool_name] = {
+            "spec": skill_tool_spec(skill),
+            "run": make_skill_runner(skill),
+            "category": "技能",
+            "responsibility": f"调用内置技能 /{skill.name}: {skill.description}",
+            "parallel_safe": skill.context == "inline",
+            "side_effectful": False,
+            "skill_name": skill.name,
+            "skill_context": skill.context,
+            "allowed_tools": list(skill.allowed_tools),
+            "disable_model_invocation": skill.disable_model_invocation,
+            "exposure": "lazy",
+        }
+    return tools
+
+
+def tool_descriptions(tools: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {"name": name, "description": info["spec"]["description"]}
+        for name, info in tools.items()
+    ]
+
+
+def tool_catalog_text() -> str:
+    return TOOL_CATALOG_PATH.read_text(encoding="utf-8") + "\n\n" + mcp_servers_catalog() + "\n\n" + skill_catalog_text()
+
+
+def dashscope_tool_specs(selected_names: list[str], tools: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    specs = []
+    for name in sorted(dict.fromkeys(selected_names)):
+        if name in tools:
+            spec = tools[name]["spec"]
+            specs.append(canonicalize({"type": "function", "function": spec}))
+    return specs
+
+
+def stable_dashscope_tool_specs(tools: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    return dashscope_tool_specs(list(tools), tools)
+
+
+def always_load_tool_names(tools: dict[str, dict[str, Any]]) -> list[str]:
+    return sorted(
+        name
+        for name, info in tools.items()
+        if info.get("exposure") == "always" or name in ALWAYS_LOAD_TOOL_NAMES
+    )
+
+
+def exposed_tool_names(
+    selected_names: list[str],
+    tools: dict[str, dict[str, Any]],
+) -> list[str]:
+    names: list[str] = []
+    names.extend(always_load_tool_names(tools))
+    names.extend(name for name in selected_names if name in tools)
+    return sorted(dict.fromkeys(names))
+
+
+def exposed_dashscope_tool_specs(
+    selected_names: list[str],
+    tools: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return dashscope_tool_specs(exposed_tool_names(selected_names, tools), tools)
