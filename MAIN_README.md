@@ -1,7 +1,7 @@
 # code_agent
 
 <p align="center">
-  <img src="./assets/main-readme-tech-cover.svg" alt="code_agent cybernetic runtime cover" width="100%">
+  <img src="./assets/code-agent-runtime-cover.svg" alt="code_agent local runtime architecture" width="100%">
 </p>
 
 _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具实时执行、权限审查、长期记忆、MCP 动态工具、Fork 并行调查和 Coordinator 规划被组织成一套可观察、可扩展、可控的 Agent 系统。_
