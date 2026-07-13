@@ -236,7 +236,7 @@ asyncio.run(main())
 - 不支持的 action、缺失或不合法的 payload、timeout 和 exception 都会被隔离；除合法 `block`/`retry` 外，后续 handler 和 runtime 继续运行。Runtime 发出的 `hook_error` / `hook_blocked` 与日志诊断是 opaque 的，只包含 event/handler/error type 等安全结构字段。直接在可信进程内调用 `HookManager.emit()` 时，返回的 `HookResult.failures` 会保留 `HookFailure.message` 供 programmatic inspection；不要把这个 raw message 或其他 prompt、参数、结果、reason、凭据及 sensitive data 写入日志。
 - `tool.error` 最多触发一次 Hook retry；第二次 retry 请求被拒绝，从而不会形成循环。
 
-工具路径固定为 `permission review（原始 tool call）→ tool.before → execution → tool.after/tool.error`。Python Hook 是 trusted extension；`tool.before` 修改和 `tool.error` retry 必须保持同一个工具名并通过本地 schema guard，但修改后的参数与 retry 不会再次经过 permission review。需要 parameter-level authorization 的应用应在 `tool.before` handler 内实施该策略，或者避免参数修改与 retry。结果 payload 也会被事件级校验。当前没有 external command Hook loader，也不允许 JSON Schema 通过 HTTP 或 file reference 拉取外部内容。
+工具路径固定为 `permission review（原始 tool call）→ tool.before → execution → tool.after/tool.error`。Python Hook 是 trusted extension；`tool.before` 修改和 `tool.error` retry 必须保持同一个工具名并通过本地 schema guard，但两者都不会再次经过 permission review。`tool.before` handler 必须自行校验并授权它产生的参数修改；retry 不会重新发出 `tool.before`，因此返回 `RETRY` 的 `tool.error` handler（或其 policy）必须自行校验并授权 retry arguments，否则应禁用 retry。结果 payload 也会被事件级校验。当前没有 external command Hook loader，也不允许 JSON Schema 通过 HTTP 或 file reference 拉取外部内容。
 
 `context.before_compact` 的 `block` 只跳过当前一次 automatic compaction，下一次达到阈值时仍可再次发出事件。`agent.before_stop` 的 `block` 会让 graph 继续下一轮，但仍受 `max_turns` 等现有硬边界约束；legacy `stop_hook` 继续受支持，并在 structured before-stop handler 之后保持原有行为。
 
