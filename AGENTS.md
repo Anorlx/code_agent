@@ -33,6 +33,8 @@ The eight supported events are:
 
 Handlers must not mutate `HookEvent.payload` or `HookEvent.metadata` directly. Return `HookResult(action=HookAction.MODIFY, updated_payload=...)` when an event permits changes.
 
+Import and use `HookManager`, then register async handlers with `HookManager.register(event_name, handler, priority=..., name=..., timeout=...)`. Registration returns an idempotent unregister callback. The CLI constructs its shared default manager with `create_default_hook_manager()`.
+
 Permission review is authoritative and occurs before `tool.before`. Python hook handlers are trusted extensions, but payload schemas, immutable tool names, and retry limits still apply. External command hooks are out of scope. JSON Schema validation must not retrieve external references.
 
 Hook handlers, public hook events, and logging must never record prompts, tool arguments, tool results, block/retry reasons, credentials, secrets, raw payloads, or raw exception messages. Emit only safe structural fields such as event name, handler name, error type, status, and bounded counters.
