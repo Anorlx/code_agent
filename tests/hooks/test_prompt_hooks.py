@@ -89,7 +89,10 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["type"], "terminal")
         self.assertEqual(events[0]["reason"], "hook_blocked")
-        self.assertIn("prompt rejected by policy", events[0]["message"])
+        self.assertEqual(
+            events[0]["message"],
+            "Prompt blocked by lifecycle hook policy.",
+        )
         self.assertEqual(model_call.requests, [])
 
     async def test_handler_failure_is_redacted_and_model_continues(self) -> None:
@@ -115,11 +118,75 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(errors[0]["event_name"], "prompt.before")
         self.assertEqual(errors[0]["handler_name"], "unsafe handler")
         self.assertEqual(errors[0]["error_type"], "RuntimeError")
-        self.assertIn("cannot process", errors[0]["message"])
+        self.assertEqual(
+            errors[0]["message"],
+            "Hook handler failed during prompt.before.",
+        )
         rendered_error = json.dumps(errors[0], ensure_ascii=False)
         self.assertNotIn(secret_prompt, rendered_error)
         self.assertNotIn(secret_memory, rendered_error)
         self.assertGreater(len(model_call.requests), 0)
+        self.assertEqual(events[-1]["reason"], "completed")
+
+    async def test_failure_message_is_opaque_to_intermediate_payload(self) -> None:
+        manager = HookManager()
+        model_call = RecordingModelCall()
+        original_prompt = "opaque-original-prompt-101"
+        original_memory = "opaque-original-memory-202"
+        intermediate_prompt = "opaque-intermediate-prompt-303"
+        intermediate_memory = "opaque-intermediate-memory-404"
+        final_prompt = "opaque-final-prompt-505"
+        final_memory = "opaque-final-memory-606"
+
+        async def intermediate(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={
+                    "user_input": intermediate_prompt,
+                    "memory_context": intermediate_memory,
+                },
+            )
+
+        async def raises(event: HookEvent) -> HookResult:
+            raise RuntimeError(
+                f"failed for {event.payload['user_input']} and "
+                f"{event.payload['memory_context']}"
+            )
+
+        async def final(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={
+                    "user_input": final_prompt,
+                    "memory_context": final_memory,
+                },
+            )
+
+        manager.register("prompt.before", intermediate)
+        manager.register("prompt.before", raises, name="intermediate failure")
+        manager.register("prompt.before", final)
+        engine = QueryEngine(model_call=model_call, hook_manager=manager)
+
+        events = await collect_events(engine, original_prompt, original_memory)
+
+        error = next(event for event in events if event.get("type") == "hook_error")
+        self.assertEqual(
+            error["message"],
+            "Hook handler failed during prompt.before.",
+        )
+        rendered_error = json.dumps(error, ensure_ascii=False)
+        for sensitive in (
+            original_prompt,
+            original_memory,
+            intermediate_prompt,
+            intermediate_memory,
+            final_prompt,
+            final_memory,
+        ):
+            self.assertNotIn(sensitive, rendered_error)
+        rendered_requests = json.dumps(model_call.requests, ensure_ascii=False)
+        self.assertIn(final_prompt, rendered_requests)
+        self.assertIn(final_memory, rendered_requests)
         self.assertEqual(events[-1]["reason"], "completed")
 
     async def test_failure_redacts_values_from_modified_payload(self) -> None:
@@ -172,8 +239,19 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
         original_memory = "original-block-memory-456"
         modified_prompt = "modified-block-prompt-789"
         modified_memory = "modified-block-memory-012"
+        intermediate_prompt = "intermediate-block-prompt-345"
+        intermediate_memory = "intermediate-block-memory-678"
 
-        async def modify(event: HookEvent) -> HookResult:
+        async def intermediate(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={
+                    "user_input": intermediate_prompt,
+                    "memory_context": intermediate_memory,
+                },
+            )
+
+        async def final(event: HookEvent) -> HookResult:
             return HookResult(
                 action=HookAction.MODIFY,
                 updated_payload={
@@ -187,11 +265,13 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
                 action=HookAction.BLOCK,
                 reason=(
                     f"policy denied {original_prompt} {original_memory} "
+                    f"{intermediate_prompt} {intermediate_memory} "
                     f"{event.payload['user_input']} {event.payload['memory_context']}"
                 ),
             )
 
-        manager.register("prompt.before", modify)
+        manager.register("prompt.before", intermediate)
+        manager.register("prompt.before", final)
         manager.register("prompt.before", block)
         engine = QueryEngine(model_call=model_call, hook_manager=manager)
 
@@ -200,10 +280,15 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(events), 1)
         terminal = events[0]
         self.assertEqual(terminal["reason"], "hook_blocked")
-        self.assertIn("policy denied", terminal["message"])
+        self.assertEqual(
+            terminal["message"],
+            "Prompt blocked by lifecycle hook policy.",
+        )
         for sensitive in (
             original_prompt,
             original_memory,
+            intermediate_prompt,
+            intermediate_memory,
             modified_prompt,
             modified_memory,
         ):
@@ -234,9 +319,9 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(errors), 2)
         messages = "\n".join(str(event["message"]) for event in errors)
         self.assertIn("user_input", messages)
-        self.assertIn("int", messages)
+        self.assertIn("string", messages)
         self.assertIn("memory_context", messages)
-        self.assertIn("list", messages)
+        self.assertIn("string or None", messages)
         rendered_requests = json.dumps(model_call.requests, ensure_ascii=False)
         self.assertIn(original_prompt, rendered_requests)
         self.assertIn(original_memory, rendered_requests)

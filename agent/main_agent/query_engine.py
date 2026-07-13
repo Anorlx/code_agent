@@ -22,38 +22,18 @@ logger = logging.getLogger(__name__)
 QueryEvent = dict[str, Any]
 
 
-def _redact_message(message: str, sensitive_values: tuple[str, ...]) -> str:
-    redacted = message
-    for value in sorted(set(sensitive_values), key=len, reverse=True):
-        if value:
-            redacted = redacted.replace(value, "[REDACTED]")
-    return redacted
-
-
-def _prompt_sensitive_values(
-    original_payload: dict[str, Any],
-    final_payload: dict[str, Any],
-) -> tuple[str, ...]:
-    return tuple(
-        value
-        for payload in (original_payload, final_payload)
-        for field in ("user_input", "memory_context")
-        if isinstance((value := payload.get(field)), str)
-    )
-
-
 def _hook_error_event(
     event_name: str,
     failure: HookFailure,
     *,
-    sensitive_values: tuple[str, ...] = (),
+    safe_message: str | None = None,
 ) -> QueryEvent:
     return {
         "type": "hook_error",
         "event_name": event_name,
         "handler_name": failure.handler_name,
         "error_type": failure.error_type,
-        "message": _redact_message(failure.message, sensitive_values),
+        "message": safe_message or f"Hook handler failed during {event_name}.",
     }
 
 
@@ -126,26 +106,14 @@ class QueryEngine:
                 )
             )
             payload = hook_result.updated_payload or {}
-            sensitive_values = _prompt_sensitive_values(
-                original_payload,
-                payload,
-            )
             for failure in hook_result.failures:
-                yield _hook_error_event(
-                    "prompt.before",
-                    failure,
-                    sensitive_values=sensitive_values,
-                )
+                yield _hook_error_event("prompt.before", failure)
 
             if hook_result.action is HookAction.BLOCK:
-                reason = _redact_message(
-                    hook_result.reason or "blocked by prompt hook",
-                    sensitive_values,
-                )
                 yield {
                     "type": "terminal",
                     "reason": "hook_blocked",
-                    "message": f"Prompt processing was blocked: {reason}",
+                    "message": "Prompt blocked by lifecycle hook policy.",
                     "state": {
                         "turn": 0,
                         "phase": "hook_blocked",
@@ -167,6 +135,10 @@ class QueryEngine:
                         f"user_input has invalid type "
                         f"{type(updated_user_input).__name__}; preserving the previous value",
                     ),
+                    safe_message=(
+                        "Invalid prompt.before payload: user_input must be a string; "
+                        "previous value preserved."
+                    ),
                 )
 
             updated_memory_context = payload.get("memory_context")
@@ -180,6 +152,10 @@ class QueryEngine:
                         "HookPayloadError",
                         f"memory_context has invalid type "
                         f"{type(updated_memory_context).__name__}; preserving the previous value",
+                    ),
+                    safe_message=(
+                        "Invalid prompt.before payload: memory_context must be a string or None; "
+                        "previous value preserved."
                     ),
                 )
 
