@@ -79,12 +79,14 @@ class HookManager:
 
         for registration in registrations:
             try:
+                # wait_for cancellation is cooperative: it cancels the handler
+                # task and waits for that cancellation to finish.
                 result = await asyncio.wait_for(
                     registration.handler(event.copied(current_payload)),
                     timeout=registration.timeout,
                 )
                 self._validate_result(event.name, result)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 failures.append(
                     HookFailure(
                         handler_name=registration.name,
@@ -149,5 +151,17 @@ class HookManager:
             result.updated_payload, dict
         ):
             raise HookProtocolError("updated_payload must be a dict")
+        if not isinstance(result.additional_context, list) or not all(
+            isinstance(item, str) for item in result.additional_context
+        ):
+            raise HookProtocolError(
+                "additional_context must be a list of strings"
+            )
+        if not isinstance(result.failures, list) or not all(
+            isinstance(item, HookFailure) for item in result.failures
+        ):
+            raise HookProtocolError(
+                "failures must be a list of HookFailure entries"
+            )
         if result.action is HookAction.RETRY and event_name != "tool.error":
             raise HookProtocolError("retry is only valid for tool.error")

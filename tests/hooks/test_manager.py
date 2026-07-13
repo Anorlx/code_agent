@@ -6,7 +6,6 @@ from agent.hooks import (
     HookEvent,
     HookFailure,
     HookManager,
-    HookProtocolError,
     HookResult,
     create_default_hook_manager,
 )
@@ -125,6 +124,8 @@ class HookManagerTests(unittest.IsolatedAsyncioTestCase):
             [failure.error_type for failure in result.failures],
             ["RuntimeError", "TimeoutError", "HookProtocolError"],
         )
+        self.assertIn("timed out after", result.failures[1].message)
+        self.assertIn("0.01", result.failures[1].message)
 
     async def test_retry_only_stops_tool_error_dispatch(self) -> None:
         manager = HookManager()
@@ -250,6 +251,67 @@ class HookManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.updated_payload, {})
         self.assertEqual(len(result.failures), 1)
         self.assertEqual(result.failures[0].error_type, "HookProtocolError")
+
+    async def test_malformed_context_and_failures_are_isolated(self) -> None:
+        manager = HookManager()
+        calls: list[str] = []
+
+        async def context_is_none(event: HookEvent) -> HookResult:
+            return HookResult(additional_context=None)  # type: ignore[arg-type]
+
+        async def context_has_non_string(event: HookEvent) -> HookResult:
+            return HookResult(additional_context=[42])  # type: ignore[list-item]
+
+        async def failures_is_none(event: HookEvent) -> HookResult:
+            return HookResult(failures=None)  # type: ignore[arg-type]
+
+        async def failures_has_wrong_type(event: HookEvent) -> HookResult:
+            return HookResult(failures=["bad"])  # type: ignore[list-item]
+
+        async def later(event: HookEvent) -> HookResult:
+            calls.append("continued")
+            return HookResult()
+
+        manager.register("prompt.before", context_is_none)
+        manager.register("prompt.before", context_has_non_string)
+        manager.register("prompt.before", failures_is_none)
+        manager.register("prompt.before", failures_has_wrong_type)
+        manager.register("prompt.before", later)
+
+        result = await manager.emit(HookEvent("prompt.before", "s1", {}))
+
+        self.assertEqual(calls, ["continued"])
+        self.assertEqual(len(result.failures), 4)
+        self.assertTrue(
+            all(
+                failure.error_type == "HookProtocolError"
+                for failure in result.failures
+            )
+        )
+
+    async def test_cancelling_emit_cancels_active_handler(self) -> None:
+        manager = HookManager(default_timeout=1)
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def waits(event: HookEvent) -> HookResult:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        manager.register("session.start", waits)
+        emit_task = asyncio.create_task(
+            manager.emit(HookEvent("session.start", "s1", {}))
+        )
+        await started.wait()
+
+        emit_task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await emit_task
+        await asyncio.wait_for(cancelled.wait(), timeout=0.1)
 
     def test_configuration_and_default_factory(self) -> None:
         with self.assertRaises(ValueError):
