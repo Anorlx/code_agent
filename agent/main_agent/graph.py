@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import time
@@ -11,7 +12,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from agent.hooks import HookManager
+from agent.hooks import HookAction, HookEvent, HookManager
 from agent.main_agent.checkpoint_store import CheckpointStore
 from agent.main_agent.config import DEFAULT_MAIN_MODEL, DEFAULT_SUB_AGENT_MODEL
 from agent.main_agent.context_manager import ContextConfig, manage_context, snip_tool_results
@@ -159,6 +160,38 @@ def _emit(state: AgentGraphState, event: dict[str, Any]) -> None:
     sink = state.get("event_sink")
     if sink is not None:
         sink(event)
+
+
+def _emit_hook_error(
+    state: AgentGraphState,
+    event_name: str,
+    handler_name: str,
+    error_type: str,
+) -> None:
+    _emit(
+        state,
+        {
+            "type": "hook_error",
+            "event_name": event_name,
+            "handler_name": handler_name,
+            "error_type": error_type,
+            "message": f"Hook handler failed during {event_name}.",
+        },
+    )
+
+
+def _protected_hook_messages(context: list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "system",
+            "type": "hook_context",
+            "protected": True,
+            "content": item,
+            "created_at": time.time(),
+        }
+        for item in context
+        if item
+    ]
 
 
 def _emit_state(state: AgentGraphState, phase: str, **extra: Any) -> None:
@@ -319,6 +352,9 @@ async def _preprocess_node(state: AgentGraphState) -> dict[str, Any]:
         system_prompt=_system_prompt(state),
         model_call=state.get("model_call"),
         config=state.get("context_config"),
+        hook_manager=state.get("hook_manager"),
+        session_id=state.get("session_id") or "",
+        run_id=state.get("run_id", ""),
     )
     next_state["messages"] = managed_messages
     next_state["context_report"] = context_report
@@ -326,6 +362,13 @@ async def _preprocess_node(state: AgentGraphState) -> dict[str, Any]:
     next_state["phase"] = "预处理"
     await _save_checkpoint(next_state)
     _emit_state(next_state, "预处理", context_report=context_report)
+    for failure in context_report.get("hook_failures", []):
+        _emit_hook_error(
+            next_state,
+            str(failure.get("event") or "context.before_compact"),
+            str(failure.get("handler_name") or "context.before_compact handler"),
+            str(failure.get("error_type") or "HookError"),
+        )
     if context_report.get("actions"):
         _emit(
             next_state,
@@ -704,15 +747,6 @@ async def _result_backfill_node(state: AgentGraphState) -> dict[str, Any]:
         )
     _emit_state(next_state, "结果回填", tool_results=state.get("tool_results", []))
 
-    stop_hook = state.get("stop_hook")
-    if stop_hook and stop_hook(_visible_state(next_state)):
-        logger.info("tool hook stopped after result backfill")
-        return {
-            **_terminal_update(next_state, "hook_stopped", TERMINATION_MESSAGES["hook_stopped"]),
-            "messages": messages,
-            "main_agent_saved_memory": next_state["main_agent_saved_memory"],
-        }
-
     logger.info(
         "result_backfill done tool_results=%s main_agent_saved_memory=%s",
         len(tool_results),
@@ -791,6 +825,42 @@ async def _verification_node(state: AgentGraphState) -> dict[str, Any]:
 
 async def _termination_check_node(state: AgentGraphState) -> dict[str, Any]:
     _emit_state(state, "终止检查")
+    hook_manager = state.get("hook_manager")
+    if hook_manager is not None:
+        hook_result = await hook_manager.emit(
+            HookEvent(
+                "agent.before_stop",
+                state.get("session_id") or "",
+                deepcopy(_visible_state(state)),
+                {"run_id": state.get("run_id", "")},
+            )
+        )
+        for failure in hook_result.failures:
+            _emit_hook_error(
+                state,
+                "agent.before_stop",
+                failure.handler_name,
+                failure.error_type,
+            )
+        if hook_result.action is HookAction.BLOCK:
+            messages = list(state.get("messages", []))
+            messages.extend(_protected_hook_messages(hook_result.additional_context))
+            _emit(
+                state,
+                {
+                    "type": "hook_blocked",
+                    "event_name": "agent.before_stop",
+                    "message": "Hook policy blocked agent stopping.",
+                },
+            )
+            logger.info("agent.before_stop hook blocked completion")
+            return {
+                "messages": messages,
+                "termination_reason": None,
+                "terminal_message": None,
+                "phase": "stop_blocked",
+            }
+
     stop_hook = state.get("stop_hook")
     if stop_hook and stop_hook(_visible_state(state)):
         logger.info("stop_hook prevented completion")
@@ -831,6 +901,14 @@ def _route_after_verify(state: AgentGraphState) -> Literal["preprocess", "__end_
     return "preprocess"
 
 
+def _route_after_termination_check(
+    state: AgentGraphState,
+) -> Literal["preprocess", "__end__"]:
+    if state.get("termination_reason"):
+        return END
+    return "preprocess"
+
+
 def build_agent_graph():
     graph = StateGraph(AgentGraphState)
     graph.add_node("preprocess", _preprocess_node)
@@ -842,7 +920,7 @@ def build_agent_graph():
     graph.add_edge(START, "preprocess")
     graph.add_conditional_edges("preprocess", _route_after_preprocess)
     graph.add_conditional_edges("api_call", _route_after_api_call)
-    graph.add_edge("termination_check", END)
+    graph.add_conditional_edges("termination_check", _route_after_termination_check)
     graph.add_conditional_edges("result_backfill", _route_after_result_backfill)
     graph.add_conditional_edges("verify", _route_after_verify)
     return graph.compile()
