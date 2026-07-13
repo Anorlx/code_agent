@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 from itertools import count
 from typing import Callable
 
 from .errors import HookProtocolError
 from .types import (
+    ALLOWED_HOOK_ACTIONS,
     HookAction,
     HookEvent,
     HookEventName,
@@ -80,9 +82,9 @@ class HookManager:
         for registration in registrations:
             try:
                 # wait_for cancellation is cooperative: it cancels the handler
-                # task and waits for that cancellation to finish.
+                # delivery task and waits for that cancellation to finish.
                 result = await asyncio.wait_for(
-                    registration.handler(event.copied(current_payload)),
+                    self._deliver(registration, event, current_payload),
                     timeout=registration.timeout,
                 )
                 self._validate_result(event.name, result)
@@ -130,6 +132,25 @@ class HookManager:
         )
 
     @staticmethod
+    async def _deliver(
+        registration: _Registration,
+        event: HookEvent,
+        current_payload: dict,
+    ) -> HookResult:
+        copied_payload, copied_metadata = await asyncio.to_thread(
+            copy.deepcopy,
+            (current_payload, event.metadata),
+        )
+        return await registration.handler(
+            HookEvent(
+                event.name,
+                event.session_id,
+                copied_payload,
+                copied_metadata,
+            )
+        )
+
+    @staticmethod
     def _validate_result(
         event_name: HookEventName, result: object
     ) -> None:
@@ -137,6 +158,10 @@ class HookManager:
             raise HookProtocolError("handler must return HookResult")
         if not isinstance(result.action, HookAction):
             raise HookProtocolError("result action must be HookAction")
+        if result.action not in ALLOWED_HOOK_ACTIONS[event_name]:
+            raise HookProtocolError(
+                f"{result.action.value} is not allowed for {event_name}"
+            )
         if result.action is HookAction.BLOCK and (
             not isinstance(result.reason, str) or not result.reason.strip()
         ):
@@ -163,5 +188,3 @@ class HookManager:
             raise HookProtocolError(
                 "failures must be a list of HookFailure entries"
             )
-        if result.action is HookAction.RETRY and event_name != "tool.error":
-            raise HookProtocolError("retry is only valid for tool.error")

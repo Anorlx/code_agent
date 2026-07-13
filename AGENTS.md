@@ -20,8 +20,8 @@
 
 The eight supported events are:
 
-- `session.start`: observe startup or `MODIFY` the in-memory title, history, and recovered flag. `BLOCK` and `RETRY` never prevent startup.
-- `session.end`: observe the termination reason, status, and message count. All actions are observation-only and never prevent shutdown.
+- `session.start`: `CONTINUE` or `MODIFY` the in-memory title, history, and recovered flag. Other actions are rejected and startup continues.
+- `session.end`: `CONTINUE` only while observing the termination reason, status, and message count; handlers never prevent shutdown.
 - `prompt.before`: `CONTINUE`, `MODIFY` the validated prompt payload, or `BLOCK` the prompt.
 - `tool.before`: runs after permission approval; `CONTINUE`, schema-valid same-tool argument `MODIFY`, or `BLOCK` execution.
 - `tool.after`: observe or `MODIFY` the validated tool result payload.
@@ -32,6 +32,8 @@ The eight supported events are:
 `CONTINUE` is the default. `MODIFY` requires a dictionary payload, `BLOCK` requires a nonempty reason, and `RETRY` is valid only for `tool.error`; runtime integrations may impose stricter event-specific limits described above. Handler timeouts, exceptions, and invalid results are isolated and reported opaquely.
 
 Handlers must not mutate `HookEvent.payload` or `HookEvent.metadata` directly. Return `HookResult(action=HookAction.MODIFY, updated_payload=...)` when an event permits changes.
+
+Runtime payload and metadata values must be deepcopy-compatible JSON-like data so each handler receives an isolated delivery. Handler-provided `updated_payload` values must also remain JSON-like.
 
 Import and use `HookManager`, then register async handlers with `HookManager.register(event_name, handler, priority=..., name=..., timeout=...)`. Registration returns an idempotent unregister callback. The CLI constructs its shared default manager with `create_default_hook_manager()`.
 

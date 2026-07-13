@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import unittest
@@ -9,6 +10,7 @@ from agent.main_agent.cli import (
     SessionEndState,
     _create_query_engine,
     _print_event,
+    _run_selected_session,
     _shutdown_background_tasks,
     emit_session_end,
     emit_session_start,
@@ -195,11 +197,17 @@ class SessionStartHookTests(unittest.IsolatedAsyncioTestCase):
     async def test_block_does_not_abort_start_or_expose_reason(self) -> None:
         manager = HookManager()
         secret = "do-not-log-block-reason"
+        observed: list[dict[str, object]] = []
 
         async def block(event: HookEvent) -> HookResult:
             return HookResult(action=HookAction.BLOCK, reason=secret)
 
+        async def later(event: HookEvent) -> HookResult:
+            observed.append(event.payload)
+            return HookResult()
+
         manager.register("session.start", block, name="policy")
+        manager.register("session.start", later, name="observer")
 
         payload, events = await emit_session_start(
             manager,
@@ -210,7 +218,9 @@ class SessionStartHookTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["title"], "private title")
         self.assertEqual(events[-1]["type"], "session_hook")
-        self.assertTrue(any(event["type"] == "hook_blocked" for event in events))
+        self.assertEqual(len(observed), 1)
+        self.assertTrue(any(event["type"] == "hook_error" for event in events))
+        self.assertFalse(any(event["type"] == "hook_blocked" for event in events))
         self.assertNotIn(secret, json.dumps(events))
 
     async def test_handler_exception_is_opaque_and_start_continues(self) -> None:
@@ -313,7 +323,11 @@ class SessionEndHookTests(unittest.IsolatedAsyncioTestCase):
             message_count=3,
         )
 
-        self.assertTrue(any(event["type"] == "hook_blocked" for event in blocked_events))
+        self.assertEqual(
+            [event["error_type"] for event in blocked_events if event["type"] == "hook_error"],
+            ["HookProtocolError", "ValueError"],
+        )
+        self.assertFalse(any(event["type"] == "hook_blocked" for event in blocked_events))
         self.assertNotIn(secret, json.dumps(blocked_events))
 
         other_manager = HookManager()
@@ -329,6 +343,36 @@ class SessionEndHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error["error_type"], "ValueError")
         self.assertNotIn(secret, json.dumps(error_events))
 
+    async def test_end_modify_is_rejected_and_later_handler_sees_original(self) -> None:
+        manager = HookManager()
+        observed: list[dict[str, object]] = []
+
+        async def modify(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={"status": "keep-running"},
+            )
+
+        async def later(event: HookEvent) -> HookResult:
+            observed.append(event.payload)
+            return HookResult()
+
+        manager.register("session.end", modify, name="modifier")
+        manager.register("session.end", later, name="observer")
+
+        events = await emit_session_end(
+            manager,
+            session_id="session-123",
+            termination_reason="user_exit",
+            status="completed",
+            message_count=4,
+        )
+
+        self.assertEqual(observed[0]["status"], "completed")
+        self.assertEqual(observed[0]["message_count"], 4)
+        error = next(event for event in events if event["type"] == "hook_error")
+        self.assertEqual(error["error_type"], "HookProtocolError")
+
     async def test_none_manager_is_a_noop(self) -> None:
         events = await emit_session_end(
             None,
@@ -341,7 +385,175 @@ class SessionEndHookTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SessionCliIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_shutdown_drains_before_emitting_end_and_only_emits_once(self) -> None:
+    async def test_start_event_render_failure_emits_end(self) -> None:
+        manager = HookManager()
+        ended: list[dict[str, object]] = []
+        observer = AsyncMock()
+        tools_task = asyncio.get_running_loop().create_future()
+        tools_task.set_result(None)
+
+        async def on_end(event: HookEvent) -> HookResult:
+            ended.append(event.payload)
+            return HookResult()
+
+        manager.register("session.end", on_end)
+        render = AsyncMock()
+
+        with (
+            patch("agent.main_agent.cli.MemoryObserver", return_value=observer),
+            patch(
+                "agent.main_agent.cli._print_event",
+                side_effect=[RuntimeError("render failed"), None],
+            ),
+            patch("agent.main_agent.cli._run_session_runtime", new=render),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "render failed"):
+                await _run_selected_session(
+                    max_turns=4,
+                    startup_started=0.0,
+                    session_setup_ms=0,
+                    session_select_ms=0,
+                    tools_task=tools_task,
+                    session_store=object(),
+                    checkpoint_store=object(),
+                    session_record=session_record(),
+                    history=[],
+                    pending_user_input=None,
+                    main_agent_saved_memory=False,
+                    hook_manager=manager,
+                    ui=TerminalUI(color=False),
+                    start_events=[{"type": "session_hook"}],
+                )
+
+        self.assertEqual(len(ended), 1)
+        render.assert_not_awaited()
+
+    async def test_post_start_observer_construction_failure_emits_end(self) -> None:
+        manager = HookManager()
+        ended: list[dict[str, object]] = []
+        tools_task = asyncio.get_running_loop().create_future()
+        tools_task.set_result(None)
+
+        async def on_end(event: HookEvent) -> HookResult:
+            ended.append(event.payload)
+            return HookResult()
+
+        manager.register("session.end", on_end)
+
+        with (
+            patch(
+                "agent.main_agent.cli.MemoryObserver",
+                side_effect=RuntimeError("observer construction failed"),
+            ),
+            patch("agent.main_agent.cli._print_event"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "observer construction failed"):
+                await _run_selected_session(
+                    max_turns=4,
+                    startup_started=0.0,
+                    session_setup_ms=0,
+                    session_select_ms=0,
+                    tools_task=tools_task,
+                    session_store=object(),
+                    checkpoint_store=object(),
+                    session_record=session_record(),
+                    history=[],
+                    pending_user_input=None,
+                    main_agent_saved_memory=False,
+                    hook_manager=manager,
+                    ui=TerminalUI(color=False),
+                )
+
+        self.assertEqual(len(ended), 1)
+        self.assertEqual(ended[0]["termination_reason"], "unexpected_error")
+
+    async def test_post_start_failure_emits_end_exactly_once(self) -> None:
+        manager = HookManager()
+        ended: list[dict[str, object]] = []
+        observer = AsyncMock()
+        tools_task = asyncio.get_running_loop().create_future()
+        tools_task.set_result(None)
+
+        async def on_end(event: HookEvent) -> HookResult:
+            ended.append(event.payload)
+            return HookResult()
+
+        manager.register("session.end", on_end)
+
+        with (
+            patch("agent.main_agent.cli.MemoryObserver", return_value=observer),
+            patch("agent.main_agent.cli._print_event"),
+            patch(
+                "agent.main_agent.cli._run_session_runtime",
+                new=AsyncMock(side_effect=RuntimeError("post-start failure")),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "post-start failure"):
+                await _run_selected_session(
+                    max_turns=4,
+                    startup_started=0.0,
+                    session_setup_ms=0,
+                    session_select_ms=0,
+                    tools_task=tools_task,
+                    session_store=object(),
+                    checkpoint_store=object(),
+                    session_record=session_record(),
+                    history=[],
+                    pending_user_input=None,
+                    main_agent_saved_memory=False,
+                    hook_manager=manager,
+                    ui=TerminalUI(color=False),
+                )
+
+        self.assertEqual(len(ended), 1)
+        self.assertEqual(ended[0]["termination_reason"], "unexpected_error")
+        self.assertEqual(ended[0]["status"], "error")
+        observer.drain.assert_awaited_once()
+
+    async def test_post_start_cancellation_emits_end_exactly_once(self) -> None:
+        manager = HookManager()
+        ended: list[dict[str, object]] = []
+        observer = AsyncMock()
+        tools_task = asyncio.get_running_loop().create_future()
+        tools_task.set_result(None)
+
+        async def on_end(event: HookEvent) -> HookResult:
+            ended.append(event.payload)
+            return HookResult()
+
+        manager.register("session.end", on_end)
+
+        with (
+            patch("agent.main_agent.cli.MemoryObserver", return_value=observer),
+            patch("agent.main_agent.cli._print_event"),
+            patch(
+                "agent.main_agent.cli._run_session_runtime",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await _run_selected_session(
+                    max_turns=4,
+                    startup_started=0.0,
+                    session_setup_ms=0,
+                    session_select_ms=0,
+                    tools_task=tools_task,
+                    session_store=object(),
+                    checkpoint_store=object(),
+                    session_record=session_record(),
+                    history=[],
+                    pending_user_input=None,
+                    main_agent_saved_memory=False,
+                    hook_manager=manager,
+                    ui=TerminalUI(color=False),
+                )
+
+        self.assertEqual(len(ended), 1)
+        self.assertEqual(ended[0]["termination_reason"], "cancelled")
+        self.assertEqual(ended[0]["status"], "aborted")
+        observer.drain.assert_awaited_once()
+
+    async def test_shutdown_emits_end_before_draining_and_only_emits_once(self) -> None:
         manager = HookManager()
         order: list[str] = []
         observer = AsyncMock()
@@ -384,11 +596,44 @@ class SessionCliIntegrationTests(unittest.IsolatedAsyncioTestCase):
             event_sink=rendered.append,
         )
 
-        self.assertEqual(order, ["flush", "end", "flush"])
+        self.assertEqual(order, ["end", "flush", "flush"])
         self.assertEqual(
             len([event for event in rendered if event["type"] == "session_hook"]),
             1,
         )
+
+    async def test_shutdown_emits_end_before_flush_exception(self) -> None:
+        manager = HookManager()
+        order: list[str] = []
+        observer = AsyncMock()
+
+        async def on_end(event: HookEvent) -> HookResult:
+            order.append("end")
+            return HookResult()
+
+        async def raises(*args, **kwargs) -> None:
+            order.append("flush")
+            raise RuntimeError("flush failed")
+
+        manager.register("session.end", on_end)
+        observer.flush.side_effect = raises
+        state = SessionEndState()
+
+        with self.assertRaisesRegex(RuntimeError, "flush failed"):
+            await _shutdown_background_tasks(
+                observer,
+                set(),
+                [{"role": "user", "content": "hello"}],
+                False,
+                hook_manager=manager,
+                session_id="session-123",
+                termination_reason="unexpected_error",
+                status="error",
+                end_state=state,
+            )
+
+        self.assertEqual(order, ["end", "flush"])
+        self.assertTrue(state.emitted)
 
     def test_query_engine_factory_forwards_the_same_manager(self) -> None:
         manager = HookManager()

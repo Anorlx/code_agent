@@ -27,6 +27,26 @@ class HookAction(str, Enum):
     RETRY = "retry"
 
 
+ALLOWED_HOOK_ACTIONS: dict[HookEventName, frozenset[HookAction]] = {
+    "session.start": frozenset({HookAction.CONTINUE, HookAction.MODIFY}),
+    "session.end": frozenset({HookAction.CONTINUE}),
+    "prompt.before": frozenset(
+        {HookAction.CONTINUE, HookAction.MODIFY, HookAction.BLOCK}
+    ),
+    "tool.before": frozenset(
+        {HookAction.CONTINUE, HookAction.MODIFY, HookAction.BLOCK}
+    ),
+    "tool.after": frozenset({HookAction.CONTINUE, HookAction.MODIFY}),
+    "tool.error": frozenset(
+        {HookAction.CONTINUE, HookAction.MODIFY, HookAction.RETRY}
+    ),
+    "context.before_compact": frozenset(
+        {HookAction.CONTINUE, HookAction.MODIFY, HookAction.BLOCK}
+    ),
+    "agent.before_stop": frozenset({HookAction.CONTINUE, HookAction.BLOCK}),
+}
+
+
 @dataclass(frozen=True)
 class HookFailure:
     handler_name: str
@@ -36,6 +56,8 @@ class HookFailure:
 
 @dataclass(frozen=True)
 class HookEvent:
+    """A lifecycle event whose runtime values must be deepcopy-compatible JSON-like data."""
+
     name: HookEventName
     session_id: str
     payload: dict[str, Any]

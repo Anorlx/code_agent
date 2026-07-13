@@ -1,4 +1,5 @@
 import asyncio
+import time
 import unittest
 
 from agent.hooks import (
@@ -12,6 +13,71 @@ from agent.hooks import (
 
 
 class HookManagerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_event_action_contract_rejects_disallowed_actions(self) -> None:
+        allowed = {
+            "session.start": {HookAction.CONTINUE, HookAction.MODIFY},
+            "session.end": {HookAction.CONTINUE},
+            "prompt.before": {
+                HookAction.CONTINUE,
+                HookAction.MODIFY,
+                HookAction.BLOCK,
+            },
+            "tool.before": {
+                HookAction.CONTINUE,
+                HookAction.MODIFY,
+                HookAction.BLOCK,
+            },
+            "tool.after": {HookAction.CONTINUE, HookAction.MODIFY},
+            "tool.error": {
+                HookAction.CONTINUE,
+                HookAction.MODIFY,
+                HookAction.RETRY,
+            },
+            "context.before_compact": {
+                HookAction.CONTINUE,
+                HookAction.MODIFY,
+                HookAction.BLOCK,
+            },
+            "agent.before_stop": {HookAction.CONTINUE, HookAction.BLOCK},
+        }
+
+        for event_name, allowed_actions in allowed.items():
+            for action in set(HookAction) - allowed_actions:
+                with self.subTest(event=event_name, action=action):
+                    manager = HookManager()
+                    observed: list[dict[str, object]] = []
+
+                    async def disallowed(event: HookEvent) -> HookResult:
+                        return HookResult(
+                            action=action,
+                            reason="policy" if action is HookAction.BLOCK else None,
+                            updated_payload=(
+                                {"value": "changed"}
+                                if action in {HookAction.MODIFY, HookAction.RETRY}
+                                else None
+                            ),
+                        )
+
+                    async def later(event: HookEvent) -> HookResult:
+                        observed.append(event.payload)
+                        return HookResult()
+
+                    manager.register(event_name, disallowed, name="disallowed")
+                    manager.register(event_name, later, name="later")
+
+                    result = await manager.emit(
+                        HookEvent(event_name, "s1", {"value": "original"})
+                    )
+
+                    self.assertEqual(observed, [{"value": "original"}])
+                    self.assertEqual(result.action, HookAction.CONTINUE)
+                    self.assertEqual(result.updated_payload, {"value": "original"})
+                    self.assertEqual(len(result.failures), 1)
+                    self.assertEqual(
+                        result.failures[0].error_type,
+                        "HookProtocolError",
+                    )
+
     async def test_handlers_run_by_priority_then_registration_order(self) -> None:
         manager = HookManager()
         calls: list[str] = []
@@ -284,6 +350,71 @@ class HookManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.failures), 1)
         self.assertEqual(result.failures[0].handler_name, "first handler")
         self.assertEqual(result.failures[0].error_type, "TypeError")
+
+    async def test_permanently_noncopyable_event_fails_each_handler(self) -> None:
+        manager = HookManager()
+        calls: list[str] = []
+
+        class NonCopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("private copy failure")
+
+        async def handler(event: HookEvent) -> HookResult:
+            calls.append("called")
+            return HookResult()
+
+        manager.register("session.start", handler, name="first")
+        manager.register("session.start", handler, name="second")
+        value = NonCopyable()
+
+        result = await manager.emit(
+            HookEvent("session.start", "s1", {"value": value})
+        )
+
+        self.assertEqual(calls, [])
+        self.assertIs(result.updated_payload["value"], value)
+        self.assertEqual(
+            [failure.handler_name for failure in result.failures],
+            ["first", "second"],
+        )
+        self.assertTrue(
+            all(failure.error_type == "TypeError" for failure in result.failures)
+        )
+
+    async def test_slow_deepcopy_is_timed_out_without_blocking_event_loop(self) -> None:
+        manager = HookManager(default_timeout=0.02)
+        handler_called = False
+        ticked = asyncio.Event()
+
+        class SlowCopy:
+            def __deepcopy__(self, memo):
+                time.sleep(0.15)
+                return "copied"
+
+        async def handler(event: HookEvent) -> HookResult:
+            nonlocal handler_called
+            handler_called = True
+            return HookResult()
+
+        async def tick() -> None:
+            await asyncio.sleep(0.005)
+            ticked.set()
+
+        manager.register("session.start", handler, name="slow copy")
+        tick_task = asyncio.create_task(tick())
+        started = time.perf_counter()
+
+        result = await manager.emit(
+            HookEvent("session.start", "s1", {"value": SlowCopy()})
+        )
+        elapsed = time.perf_counter() - started
+        await tick_task
+
+        self.assertLess(elapsed, 0.1)
+        self.assertTrue(ticked.is_set())
+        self.assertFalse(handler_called)
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(result.failures[0].error_type, "TimeoutError")
 
     async def test_handler_failures_from_results_are_aggregated(self) -> None:
         manager = HookManager()

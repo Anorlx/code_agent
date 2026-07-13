@@ -10,7 +10,6 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from agent.hooks import (
-    HookAction,
     HookEvent,
     HookFailure,
     HookManager,
@@ -59,6 +58,14 @@ class CheckpointStartupAction:
 @dataclass
 class SessionEndState:
     emitted: bool = False
+
+
+@dataclass
+class SessionRuntimeState:
+    history: list[dict[str, Any]]
+    main_agent_saved_memory: bool
+    termination_reason: str = "unexpected_error"
+    status: str = "error"
 
 
 def _lifecycle_hook_error_event(
@@ -158,22 +165,6 @@ async def emit_session_start(
         else:
             events.append(_lifecycle_payload_error("session.start"))
 
-    if result.action is HookAction.BLOCK:
-        events.append(
-            {
-                "type": "hook_blocked",
-                "event_name": "session.start",
-                "message": "Blocking is not supported for session lifecycle hooks; continuing.",
-            }
-        )
-    elif result.action is HookAction.RETRY:
-        events.append(
-            {
-                "type": "hook_retry",
-                "event_name": "session.start",
-                "status": "ignored",
-            }
-        )
     events.append(
         {
             "type": "session_hook",
@@ -211,22 +202,6 @@ async def emit_session_end(
         _lifecycle_hook_error_event("session.end", failure)
         for failure in result.failures
     ]
-    if result.action is HookAction.BLOCK:
-        events.append(
-            {
-                "type": "hook_blocked",
-                "event_name": "session.end",
-                "message": "Blocking is not supported for session lifecycle hooks; shutdown continues.",
-            }
-        )
-    elif result.action is HookAction.RETRY:
-        events.append(
-            {
-                "type": "hook_retry",
-                "event_name": "session.end",
-                "status": "ignored",
-            }
-        )
     events.append(
         {
             "type": "session_hook",
@@ -1041,7 +1016,22 @@ async def _shutdown_background_tasks(
     end_state: SessionEndState | None = None,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
-    """Drain memory and summaries, then emit session.end at most once."""
+    """Emit session.end at most once, then drain memory and summaries."""
+    if session_id is not None and not (
+        end_state is not None and end_state.emitted
+    ):
+        if end_state is not None:
+            end_state.emitted = True
+        events = await emit_session_end(
+            hook_manager,
+            session_id=session_id,
+            termination_reason=termination_reason,
+            status=status,
+            message_count=len(history),
+        )
+        if event_sink is not None:
+            for event in events:
+                event_sink(event)
     if history:
         await memory_observer.flush(
             history,
@@ -1050,20 +1040,6 @@ async def _shutdown_background_tasks(
     else:
         await memory_observer.drain()
     await _drain_tasks(summary_tasks)
-    if session_id is None or (end_state is not None and end_state.emitted):
-        return
-    if end_state is not None:
-        end_state.emitted = True
-    events = await emit_session_end(
-        hook_manager,
-        session_id=session_id,
-        termination_reason=termination_reason,
-        status=status,
-        message_count=len(history),
-    )
-    if event_sink is not None:
-        for event in events:
-            event_sink(event)
 
 
 def _create_query_engine(
@@ -1088,56 +1064,23 @@ def _create_query_engine(
     )
 
 
-async def chat_loop(max_turns: int, color: bool = False) -> None:
-    ui = TerminalUI(color=color and sys.stdout.isatty())
-    hook_manager = create_default_hook_manager()
-    startup_started = time.perf_counter()
-    session_store = SessionStore()
-    checkpoint_store = CheckpointStore()
-    tools_task = asyncio.create_task(_load_tools(ui))
-    session_setup_started = time.perf_counter()
-    await asyncio.gather(session_store.setup(), checkpoint_store.setup())
-    await checkpoint_store.cleanup_old()
-    session_setup_ms = int((time.perf_counter() - session_setup_started) * 1000)
-    try:
-        session_select_started = time.perf_counter()
-        session_record, history = await _choose_session(session_store, ui)
-        session_select_ms = int((time.perf_counter() - session_select_started) * 1000)
-        checkpoint_action = await _handle_checkpoint_on_start(
-            checkpoint_store=checkpoint_store,
-            session_store=session_store,
-            session_record=session_record,
-            history=history,
-            ui=ui,
-        )
-        recovered = (
-            checkpoint_action.pending_input is not None
-            or (
-                checkpoint_action.history is not None
-                and checkpoint_action.history is not history
-            )
-        )
-        history = checkpoint_action.history if checkpoint_action.history is not None else history
-        pending_user_input = checkpoint_action.pending_input
-        last_main_agent_saved_memory = checkpoint_action.main_agent_saved_memory
-        start_payload, start_events = await emit_session_start(
-            hook_manager,
-            session_record,
-            history,
-            recovered=recovered,
-        )
-        session_record = replace(session_record, title=start_payload["title"])
-        history = start_payload["history"]
-        recovered = start_payload["recovered"]
-        for event in start_events:
-            _print_event(event, ui)
-    except (EOFError, KeyboardInterrupt):
-        if not tools_task.done():
-            tools_task.cancel()
-        print(ui.event_line("terminal", "aborted_streaming", "red"))
-        logger.info("chat_loop aborted while choosing session")
-        return
-    summary_tasks: set[asyncio.Task[Any]] = set()
+async def _run_session_runtime(
+    *,
+    max_turns: int,
+    startup_started: float,
+    session_setup_ms: int,
+    session_select_ms: int,
+    tools_task: asyncio.Future[ToolLoadResult],
+    session_store: SessionStore,
+    checkpoint_store: CheckpointStore,
+    session_record: SessionRecord,
+    pending_user_input: str | None,
+    hook_manager: HookManager,
+    ui: TerminalUI,
+    summary_tasks: set[asyncio.Task[Any]],
+    memory_observer: MemoryObserver,
+    state: SessionRuntimeState,
+) -> None:
     try:
         tool_load_result = await tools_task
         tools = tool_load_result.tools
@@ -1177,8 +1120,6 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
             "blue",
         )
     )
-    memory_observer = MemoryObserver(model_call=dashscope_stream_chat)
-    session_end_state = SessionEndState()
     reader = create_terminal_input("\ncode_agent> ")
     logger.info("chat_loop started max_turns=%s tools=%s", max_turns, list(tools))
     print(ui.welcome(session_record, reader.name, len(tools), max_turns))
@@ -1191,34 +1132,14 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
             try:
                 user_input = await reader.read()
             except (EOFError, KeyboardInterrupt):
+                state.termination_reason = "input_interrupted"
+                state.status = "aborted"
                 print(ui.event_line("terminal", "aborted_streaming", "red"))
-                await _shutdown_background_tasks(
-                    memory_observer,
-                    summary_tasks,
-                    history,
-                    last_main_agent_saved_memory,
-                    hook_manager=hook_manager,
-                    session_id=session_record.id,
-                    termination_reason="input_interrupted",
-                    status="aborted",
-                    end_state=session_end_state,
-                    event_sink=lambda event: _print_event(event, ui),
-                )
                 logger.info("chat_loop aborted while reading input")
                 return
         if user_input.lower() in {"exit", "quit"}:
-            await _shutdown_background_tasks(
-                memory_observer,
-                summary_tasks,
-                history,
-                last_main_agent_saved_memory,
-                hook_manager=hook_manager,
-                session_id=session_record.id,
-                termination_reason="user_exit",
-                status="completed",
-                end_state=session_end_state,
-                event_sink=lambda event: _print_event(event, ui),
-            )
+            state.termination_reason = "user_exit"
+            state.status = "completed"
             print(ui.event_line("terminal", "completed", "green"))
             logger.info("chat_loop completed by user command")
             return
@@ -1275,27 +1196,184 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
         last_state = None
         async for event in engine.submitMessage(
             user_input,
-            history=history,
+            history=state.history,
             memory_context=memory_context,
         ):
             _print_event(event, ui)
             if "state" in event:
                 last_state = event["state"]
         if last_state is not None:
-            history = last_state["messages"]
-            last_main_agent_saved_memory = bool(last_state.get("main_agent_saved_memory"))
-            await session_store.save_messages(session_record.id, history)
+            state.history = last_state["messages"]
+            state.main_agent_saved_memory = bool(
+                last_state.get("main_agent_saved_memory")
+            )
+            await session_store.save_messages(session_record.id, state.history)
             _track_task(
                 summary_tasks,
                 asyncio.create_task(
-                    _refresh_session_summary(session_store, session_record.id, history)
+                    _refresh_session_summary(
+                        session_store,
+                        session_record.id,
+                        state.history,
+                    )
                 ),
             )
             memory_observer.observe(
-                history,
-                main_agent_saved_memory=last_main_agent_saved_memory,
+                state.history,
+                main_agent_saved_memory=state.main_agent_saved_memory,
             )
-            logger.info("history updated messages=%s", len(history))
+            logger.info("history updated messages=%s", len(state.history))
+
+
+async def _run_selected_session(
+    *,
+    max_turns: int,
+    startup_started: float,
+    session_setup_ms: int,
+    session_select_ms: int,
+    tools_task: asyncio.Future[ToolLoadResult],
+    session_store: SessionStore,
+    checkpoint_store: CheckpointStore,
+    session_record: SessionRecord,
+    history: list[dict[str, Any]],
+    pending_user_input: str | None,
+    main_agent_saved_memory: bool,
+    hook_manager: HookManager,
+    ui: TerminalUI,
+    start_events: list[dict[str, Any]] | None = None,
+) -> None:
+    summary_tasks: set[asyncio.Task[Any]] = set()
+    end_state = SessionEndState()
+    state = SessionRuntimeState(history, main_agent_saved_memory)
+    runtime_failed = False
+    memory_observer: MemoryObserver | None = None
+    try:
+        memory_observer = MemoryObserver(model_call=dashscope_stream_chat)
+        for event in start_events or []:
+            _print_event(event, ui)
+        await _run_session_runtime(
+            max_turns=max_turns,
+            startup_started=startup_started,
+            session_setup_ms=session_setup_ms,
+            session_select_ms=session_select_ms,
+            tools_task=tools_task,
+            session_store=session_store,
+            checkpoint_store=checkpoint_store,
+            session_record=session_record,
+            pending_user_input=pending_user_input,
+            hook_manager=hook_manager,
+            ui=ui,
+            summary_tasks=summary_tasks,
+            memory_observer=memory_observer,
+            state=state,
+        )
+    except asyncio.CancelledError:
+        runtime_failed = True
+        state.termination_reason = "cancelled"
+        state.status = "aborted"
+        raise
+    except Exception:
+        runtime_failed = True
+        state.termination_reason = "unexpected_error"
+        state.status = "error"
+        raise
+    finally:
+        try:
+            if memory_observer is None:
+                end_state.emitted = True
+                events = await emit_session_end(
+                    hook_manager,
+                    session_id=session_record.id,
+                    termination_reason=state.termination_reason,
+                    status=state.status,
+                    message_count=len(state.history),
+                )
+                for event in events:
+                    _print_event(event, ui)
+            else:
+                await _shutdown_background_tasks(
+                    memory_observer,
+                    summary_tasks,
+                    state.history,
+                    state.main_agent_saved_memory,
+                    hook_manager=hook_manager,
+                    session_id=session_record.id,
+                    termination_reason=state.termination_reason,
+                    status=state.status,
+                    end_state=end_state,
+                    event_sink=lambda event: _print_event(event, ui),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not runtime_failed:
+                raise
+            logger.exception("session shutdown failed after runtime failure")
+
+
+async def chat_loop(max_turns: int, color: bool = False) -> None:
+    ui = TerminalUI(color=color and sys.stdout.isatty())
+    hook_manager = create_default_hook_manager()
+    startup_started = time.perf_counter()
+    session_store = SessionStore()
+    checkpoint_store = CheckpointStore()
+    tools_task = asyncio.create_task(_load_tools(ui))
+    session_setup_started = time.perf_counter()
+    await asyncio.gather(session_store.setup(), checkpoint_store.setup())
+    await checkpoint_store.cleanup_old()
+    session_setup_ms = int((time.perf_counter() - session_setup_started) * 1000)
+    try:
+        session_select_started = time.perf_counter()
+        session_record, history = await _choose_session(session_store, ui)
+        session_select_ms = int((time.perf_counter() - session_select_started) * 1000)
+        checkpoint_action = await _handle_checkpoint_on_start(
+            checkpoint_store=checkpoint_store,
+            session_store=session_store,
+            session_record=session_record,
+            history=history,
+            ui=ui,
+        )
+        recovered = (
+            checkpoint_action.pending_input is not None
+            or (
+                checkpoint_action.history is not None
+                and checkpoint_action.history is not history
+            )
+        )
+        history = checkpoint_action.history if checkpoint_action.history is not None else history
+        pending_user_input = checkpoint_action.pending_input
+        last_main_agent_saved_memory = checkpoint_action.main_agent_saved_memory
+        start_payload, start_events = await emit_session_start(
+            hook_manager,
+            session_record,
+            history,
+            recovered=recovered,
+        )
+        session_record = replace(session_record, title=start_payload["title"])
+        history = start_payload["history"]
+        recovered = start_payload["recovered"]
+    except (EOFError, KeyboardInterrupt):
+        if not tools_task.done():
+            tools_task.cancel()
+        print(ui.event_line("terminal", "aborted_streaming", "red"))
+        logger.info("chat_loop aborted while choosing session")
+        return
+    await _run_selected_session(
+        max_turns=max_turns,
+        startup_started=startup_started,
+        session_setup_ms=session_setup_ms,
+        session_select_ms=session_select_ms,
+        tools_task=tools_task,
+        session_store=session_store,
+        checkpoint_store=checkpoint_store,
+        session_record=session_record,
+        history=history,
+        pending_user_input=pending_user_input,
+        main_agent_saved_memory=last_main_agent_saved_memory,
+        hook_manager=hook_manager,
+        ui=ui,
+        start_events=start_events,
+    )
 
 
 def main() -> None:
