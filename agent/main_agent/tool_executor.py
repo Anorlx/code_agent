@@ -235,6 +235,11 @@ class StreamingToolExecutor:
                 tracked.task.cancel()
 
     def _cancelled_result_event(self, tracked: _TrackedTool, reason: str) -> QueryEvent:
+        arguments = (
+            tracked.effective_arguments
+            if tracked.effective_arguments is not None
+            else _tool_arguments(tracked.tool_call)
+        )
         result = {
             "ok": False,
             "error": reason,
@@ -246,13 +251,24 @@ class StreamingToolExecutor:
                 "role": "tool",
                 "tool_call_id": tracked.tool_call.get("id", tracked.name),
                 "name": tracked.name,
-                "arguments": tracked.tool_call.get("arguments") or {},
+                "arguments": copy.deepcopy(arguments),
                 "summary": "cancelled",
                 "content": f"ERROR: {reason}",
                 "raw_result": result,
                 "created_at": time.time(),
             },
         }
+
+    def _consume_internal_event(
+        self,
+        tracked: _TrackedTool,
+        event: QueryEvent,
+    ) -> None:
+        if event.get("type") != "_tool_effective_arguments":
+            return
+        arguments = event.get("arguments")
+        if isinstance(arguments, dict):
+            tracked.effective_arguments = copy.deepcopy(arguments)
 
     async def _consume_tool_stream(self, tracked: _TrackedTool) -> None:
         try:
@@ -269,6 +285,10 @@ class StreamingToolExecutor:
                 hook_manager=self._hook_manager,
                 session_id=self._session_id,
                 run_id=self._run_id,
+                _internal_event_sink=lambda event: self._consume_internal_event(
+                    tracked,
+                    event,
+                ),
             ):
                 if event.get("type") == "tool_result":
                     tracked.result_event = event

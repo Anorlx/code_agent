@@ -19,6 +19,7 @@ PermissionReviewer = Callable[
     Awaitable[dict[str, Any]],
 ]
 PermissionPrompter = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+InternalEventSink = Callable[[dict[str, Any]], None]
 
 
 def _tool_result_content(result: dict[str, Any]) -> str:
@@ -634,7 +635,16 @@ async def _run_tool_call_with_hooks(
     hook_manager: HookManager | None,
     session_id: str,
     run_id: str,
+    internal_event_sink: InternalEventSink | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if internal_event_sink is not None:
+        internal_event_sink(
+            {
+                "type": "_tool_effective_arguments",
+                "tool_call_id": tool_call.get("id", _tool_name(tool_call)),
+                "arguments": copy.deepcopy(_tool_arguments(tool_call)),
+            }
+        )
     message = await _run_tool_call(tool_call, tools, runtime_context)
     if hook_manager is None:
         return message, []
@@ -676,6 +686,14 @@ async def _run_tool_call_with_hooks(
     # intentionally occur after the authoritative permission gate; same-tool
     # and schema validation constrain the effective call without re-reviewing it.
     diagnostics.append({"type": "hook_retry", "name": message["name"], "attempt": 1})
+    if internal_event_sink is not None:
+        internal_event_sink(
+            {
+                "type": "_tool_effective_arguments",
+                "tool_call_id": retry_call.get("id", _tool_name(retry_call)),
+                "arguments": copy.deepcopy(_tool_arguments(retry_call)),
+            }
+        )
     executed_retry_message = await _run_tool_call(retry_call, tools, runtime_context)
     retry_message, retry_result, retry_diagnostics, _ = await _apply_result_hook(
         tool_call=retry_call,
@@ -737,6 +755,7 @@ async def run_tool_subagent(
     hook_manager: HookManager | None = None,
     session_id: str = "",
     run_id: str = "",
+    _internal_event_sink: InternalEventSink | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     context_messages = build_task_context(
         user_input=user_input,
@@ -905,6 +924,7 @@ async def run_tool_subagent(
                         hook_manager,
                         session_id,
                         run_id,
+                        _internal_event_sink,
                     )
                     for tool_call in approved_batch
                 ]
@@ -922,6 +942,7 @@ async def run_tool_subagent(
                     hook_manager,
                     session_id,
                     run_id,
+                    _internal_event_sink,
                 )
                 for diagnostic_event in diagnostic_events:
                     yield diagnostic_event

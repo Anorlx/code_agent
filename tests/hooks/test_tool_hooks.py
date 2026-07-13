@@ -490,6 +490,53 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(event.get("type") == "hook_retry" for event in events))
         self.assertNotIn("not-an-integer", json.dumps(errors))
 
+    async def test_checkpoint_uses_retry_arguments_during_second_attempt(self):
+        manager = HookManager()
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+        calls = 0
+
+        async def retry(event):
+            return HookResult(
+                action=HookAction.RETRY,
+                updated_payload={**event.payload, "arguments": {"n": 2}},
+            )
+
+        async def run(arguments):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"ok": False, "error": "retry"}
+            retry_started.set()
+            await release_retry.wait()
+            return {"ok": True, "content": "done"}
+
+        manager.register("tool.error", retry)
+        executor = StreamingToolExecutor(
+            user_input="run",
+            messages=[],
+            tools=number_tool(run),
+            permission_reviewer=None,
+            permission_prompter=None,
+            reviewer_model_name="reviewer",
+            memory_context=None,
+            runtime_context={},
+            hook_manager=manager,
+        )
+        executor.submit({"id": "call-1", "name": "number", "arguments": {"n": 1}})
+        await asyncio.wait_for(retry_started.wait(), timeout=1)
+
+        checkpoint = executor.checkpoint_tool_states()[0]
+        self.assertEqual(checkpoint["status"], "executing")
+        self.assertEqual(checkpoint["arguments"], {"n": 2})
+        public_events = await executor.drain_ready()
+        self.assertFalse(
+            any(event.get("type") == "_tool_effective_arguments" for event in public_events)
+        )
+
+        release_retry.set()
+        await executor.finish()
+
     async def test_retry_attempt_is_in_second_lifecycle_event_metadata(self):
         manager = HookManager()
         attempts = []
@@ -722,6 +769,64 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(cancelled["summary"], "cancelled")
+
+    async def test_cancelled_sibling_uses_hook_modified_effective_arguments(self):
+        manager = HookManager()
+        sibling_started = asyncio.Event()
+
+        async def before(event):
+            if event.payload["tool_name"] != "worker":
+                return HookResult()
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={**event.payload, "arguments": {"n": 2}},
+            )
+
+        async def bash_run(arguments):
+            await asyncio.wait_for(sibling_started.wait(), timeout=1)
+            return {"ok": False, "error": "bash failed"}
+
+        async def sibling_run(arguments):
+            self.assertEqual(arguments, {"n": 2})
+            sibling_started.set()
+            await asyncio.Event().wait()
+
+        manager.register("tool.before", before)
+        tools = {
+            "bash": {
+                "run": bash_run,
+                "permission": "allow",
+                "parallel_safe": True,
+                "spec": {"parameters": {"type": "object", "properties": {}}},
+            },
+            **number_tool(sibling_run, name="worker"),
+        }
+        executor = StreamingToolExecutor(
+            user_input="run",
+            messages=[],
+            tools=tools,
+            permission_reviewer=None,
+            permission_prompter=None,
+            reviewer_model_name="reviewer",
+            memory_context=None,
+            runtime_context={},
+            hook_manager=manager,
+        )
+        executor.submit({"id": "bash-call", "name": "bash", "arguments": {}})
+        executor.submit(
+            {"id": "worker-call", "name": "worker", "arguments": {"n": 1}}
+        )
+
+        events = await asyncio.wait_for(executor.finish(), timeout=2)
+
+        self.assertFalse(
+            any(event.get("type") == "_tool_effective_arguments" for event in events)
+        )
+        cancelled = executor.results[1]
+        self.assertEqual(cancelled["arguments"], {"n": 2})
+        checkpoint = executor.checkpoint_tool_states()[1]
+        self.assertEqual(checkpoint["arguments"], {"n": 2})
+        self.assertTrue(checkpoint["result"]["cancelled"])
 
     async def test_streaming_executor_forwards_runtime_hook_identity_without_checkpointing_it(self):
         manager = HookManager()
