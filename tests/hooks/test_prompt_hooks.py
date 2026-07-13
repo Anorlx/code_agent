@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from agent.hooks import HookAction, HookEvent, HookManager, HookResult
 from agent.main_agent.graph import _checkpoint_payload, _initial_graph_state, _visible_state
@@ -121,6 +122,126 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(model_call.requests), 0)
         self.assertEqual(events[-1]["reason"], "completed")
 
+    async def test_failure_redacts_values_from_modified_payload(self) -> None:
+        manager = HookManager()
+        model_call = RecordingModelCall()
+        original_prompt = "original-prompt-8675309"
+        original_memory = "original-memory-112358"
+        modified_prompt = "modified-prompt-424242"
+        modified_memory = "modified-memory-161803"
+
+        async def modify(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={
+                    "user_input": modified_prompt,
+                    "memory_context": modified_memory,
+                },
+            )
+
+        async def raises(event: HookEvent) -> HookResult:
+            raise RuntimeError(
+                f"failed for {event.payload['user_input']} and "
+                f"{event.payload['memory_context']}"
+            )
+
+        manager.register("prompt.before", modify)
+        manager.register("prompt.before", raises, name="later handler")
+        engine = QueryEngine(model_call=model_call, hook_manager=manager)
+
+        events = await collect_events(engine, original_prompt, original_memory)
+
+        error = next(event for event in events if event.get("type") == "hook_error")
+        rendered_error = json.dumps(error, ensure_ascii=False)
+        for sensitive in (
+            original_prompt,
+            original_memory,
+            modified_prompt,
+            modified_memory,
+        ):
+            self.assertNotIn(sensitive, rendered_error)
+        rendered_requests = json.dumps(model_call.requests, ensure_ascii=False)
+        self.assertIn(modified_prompt, rendered_requests)
+        self.assertIn(modified_memory, rendered_requests)
+        self.assertEqual(events[-1]["reason"], "completed")
+
+    async def test_block_terminal_message_redacts_original_and_modified_values(self) -> None:
+        manager = HookManager()
+        model_call = RecordingModelCall()
+        original_prompt = "original-block-prompt-123"
+        original_memory = "original-block-memory-456"
+        modified_prompt = "modified-block-prompt-789"
+        modified_memory = "modified-block-memory-012"
+
+        async def modify(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={
+                    "user_input": modified_prompt,
+                    "memory_context": modified_memory,
+                },
+            )
+
+        async def block(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.BLOCK,
+                reason=(
+                    f"policy denied {original_prompt} {original_memory} "
+                    f"{event.payload['user_input']} {event.payload['memory_context']}"
+                ),
+            )
+
+        manager.register("prompt.before", modify)
+        manager.register("prompt.before", block)
+        engine = QueryEngine(model_call=model_call, hook_manager=manager)
+
+        events = await collect_events(engine, original_prompt, original_memory)
+
+        self.assertEqual(len(events), 1)
+        terminal = events[0]
+        self.assertEqual(terminal["reason"], "hook_blocked")
+        self.assertIn("policy denied", terminal["message"])
+        for sensitive in (
+            original_prompt,
+            original_memory,
+            modified_prompt,
+            modified_memory,
+        ):
+            self.assertNotIn(sensitive, terminal["message"])
+        self.assertEqual(model_call.requests, [])
+
+    async def test_invalid_modified_field_types_preserve_prior_values(self) -> None:
+        manager = HookManager()
+        model_call = RecordingModelCall()
+        original_prompt = "valid prompt"
+        original_memory = "valid memory"
+
+        async def invalid_types(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={
+                    "user_input": 123,
+                    "memory_context": ["invalid"],
+                },
+            )
+
+        manager.register("prompt.before", invalid_types, name="bad schema")
+        engine = QueryEngine(model_call=model_call, hook_manager=manager)
+
+        events = await collect_events(engine, original_prompt, original_memory)
+
+        errors = [event for event in events if event.get("type") == "hook_error"]
+        self.assertEqual(len(errors), 2)
+        messages = "\n".join(str(event["message"]) for event in errors)
+        self.assertIn("user_input", messages)
+        self.assertIn("int", messages)
+        self.assertIn("memory_context", messages)
+        self.assertIn("list", messages)
+        rendered_requests = json.dumps(model_call.requests, ensure_ascii=False)
+        self.assertIn(original_prompt, rendered_requests)
+        self.assertIn(original_memory, rendered_requests)
+        self.assertEqual(events[-1]["reason"], "completed")
+
     async def test_none_hook_manager_preserves_existing_behavior(self) -> None:
         model_call = RecordingModelCall()
         engine = QueryEngine(model_call=model_call, hook_manager=None)
@@ -131,9 +252,22 @@ class PromptHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["reason"], "completed")
         self.assertFalse(any(event.get("type") == "hook_error" for event in events))
 
-    async def test_hook_manager_is_runtime_state_only(self) -> None:
+    async def test_hook_manager_is_forwarded_and_runtime_state_only(self) -> None:
         manager = HookManager()
         model_call = RecordingModelCall()
+        captured: dict[str, object] = {}
+
+        async def capturing_run_agent(**kwargs):
+            captured.update(kwargs)
+            yield {"type": "terminal", "reason": "captured", "message": "captured"}
+
+        engine = QueryEngine(model_call=model_call, hook_manager=manager)
+        with patch("agent.main_agent.query_engine.run_agent", capturing_run_agent):
+            events = await collect_events(engine, "hello")
+
+        self.assertEqual(events[-1]["reason"], "captured")
+        self.assertIs(captured["hook_manager"], manager)
+
         state = _initial_graph_state(
             user_input="hello",
             history=None,
