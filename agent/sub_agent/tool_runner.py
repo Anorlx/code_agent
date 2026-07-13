@@ -4,6 +4,7 @@ import asyncio
 import copy
 import json
 import logging
+import re
 import time
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
@@ -93,7 +94,200 @@ def _schema_type_matches(value: Any, schema_type: str) -> bool:
         return isinstance(value, list)
     if schema_type == "object":
         return isinstance(value, dict)
-    return True
+    if schema_type == "null":
+        return value is None
+    return False
+
+
+_SCHEMA_ANNOTATION_KEYS = {
+    "$id",
+    "$schema",
+    "default",
+    "deprecated",
+    "description",
+    "examples",
+    "readOnly",
+    "title",
+    "writeOnly",
+}
+_SCHEMA_VALIDATION_KEYS = {
+    "additionalProperties",
+    "allOf",
+    "anyOf",
+    "const",
+    "enum",
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "items",
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "maximum",
+    "minItems",
+    "minLength",
+    "minProperties",
+    "minimum",
+    "oneOf",
+    "pattern",
+    "properties",
+    "required",
+    "type",
+    "uniqueItems",
+}
+
+
+def _validate_schema_value(
+    value: Any,
+    schema: dict[str, Any],
+    *,
+    path: str = "$",
+) -> str | None:
+    unsupported = set(schema) - _SCHEMA_ANNOTATION_KEYS - _SCHEMA_VALIDATION_KEYS
+    if unsupported:
+        return f"{path} uses an unsupported schema constraint."
+
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        if keyword not in schema:
+            continue
+        branches = schema[keyword]
+        if not isinstance(branches, list) or not all(
+            isinstance(branch, dict) for branch in branches
+        ):
+            return f"{path} has an invalid {keyword} schema."
+        matches = [
+            _validate_schema_value(value, branch, path=path) is None
+            for branch in branches
+        ]
+        if keyword == "allOf" and not all(matches):
+            return f"{path} does not satisfy allOf."
+        if keyword == "anyOf" and not any(matches):
+            return f"{path} does not satisfy anyOf."
+        if keyword == "oneOf" and sum(matches) != 1:
+            return f"{path} does not satisfy oneOf."
+
+    schema_type = schema.get("type")
+    if schema_type is not None:
+        allowed_types = schema_type if isinstance(schema_type, list) else [schema_type]
+        if not allowed_types or not all(isinstance(item, str) for item in allowed_types):
+            return f"{path} has an invalid type constraint."
+        if not any(_schema_type_matches(value, item) for item in allowed_types):
+            return f"{path} has the wrong type."
+
+    enum = schema.get("enum")
+    if enum is not None:
+        if not isinstance(enum, list) or value not in enum:
+            return f"{path} is not an allowed enum value."
+    if "const" in schema and value != schema["const"]:
+        return f"{path} does not match const."
+
+    if isinstance(value, dict):
+        required = schema.get("required", [])
+        properties = schema.get("properties", {})
+        if not isinstance(required, list) or not all(
+            isinstance(key, str) for key in required
+        ):
+            return f"{path} has an invalid required constraint."
+        if not isinstance(properties, dict) or not all(
+            isinstance(key, str) and isinstance(field_schema, dict)
+            for key, field_schema in properties.items()
+        ):
+            return f"{path} has an invalid properties constraint."
+        for key in required:
+            if key not in value:
+                return f"{path}.{key} is required."
+        for key, field_value in value.items():
+            if key in properties:
+                error = _validate_schema_value(
+                    field_value,
+                    properties[key],
+                    path=f"{path}.{key}",
+                )
+                if error is not None:
+                    return error
+                continue
+            additional = schema.get("additionalProperties", True)
+            if additional is False:
+                return f"{path} contains an additional property."
+            if isinstance(additional, dict):
+                error = _validate_schema_value(
+                    field_value,
+                    additional,
+                    path=f"{path}.{key}",
+                )
+                if error is not None:
+                    return error
+            elif additional is not True:
+                return f"{path} has an invalid additionalProperties constraint."
+        for keyword, comparator in (
+            ("minProperties", lambda size, limit: size >= limit),
+            ("maxProperties", lambda size, limit: size <= limit),
+        ):
+            if keyword in schema:
+                limit = schema[keyword]
+                if not isinstance(limit, int) or not comparator(len(value), limit):
+                    return f"{path} does not satisfy {keyword}."
+
+    if isinstance(value, list):
+        items = schema.get("items")
+        if items is not None:
+            if not isinstance(items, dict):
+                return f"{path} has an invalid items constraint."
+            for index, item in enumerate(value):
+                error = _validate_schema_value(item, items, path=f"{path}[{index}]")
+                if error is not None:
+                    return error
+        for keyword, comparator in (
+            ("minItems", lambda size, limit: size >= limit),
+            ("maxItems", lambda size, limit: size <= limit),
+        ):
+            if keyword in schema:
+                limit = schema[keyword]
+                if not isinstance(limit, int) or not comparator(len(value), limit):
+                    return f"{path} does not satisfy {keyword}."
+        if schema.get("uniqueItems") is True:
+            for index, item in enumerate(value):
+                if item in value[:index]:
+                    return f"{path} does not satisfy uniqueItems."
+        elif "uniqueItems" in schema and schema["uniqueItems"] is not False:
+            return f"{path} has an invalid uniqueItems constraint."
+
+    if isinstance(value, str):
+        for keyword, comparator in (
+            ("minLength", lambda size, limit: size >= limit),
+            ("maxLength", lambda size, limit: size <= limit),
+        ):
+            if keyword in schema:
+                limit = schema[keyword]
+                if not isinstance(limit, int) or not comparator(len(value), limit):
+                    return f"{path} does not satisfy {keyword}."
+        if "pattern" in schema:
+            pattern = schema["pattern"]
+            if not isinstance(pattern, str):
+                return f"{path} has an invalid pattern constraint."
+            try:
+                matches_pattern = re.search(pattern, value) is not None
+            except re.error:
+                return f"{path} has an invalid pattern constraint."
+            if not matches_pattern:
+                return f"{path} does not satisfy pattern."
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        for keyword, comparator in (
+            ("minimum", lambda number, limit: number >= limit),
+            ("maximum", lambda number, limit: number <= limit),
+            ("exclusiveMinimum", lambda number, limit: number > limit),
+            ("exclusiveMaximum", lambda number, limit: number < limit),
+        ):
+            if keyword in schema:
+                limit = schema[keyword]
+                if (
+                    not isinstance(limit, (int, float))
+                    or isinstance(limit, bool)
+                    or not comparator(value, limit)
+                ):
+                    return f"{path} does not satisfy {keyword}."
+
+    return None
 
 
 def _validate_tool_input(
@@ -104,9 +298,6 @@ def _validate_tool_input(
     arguments = _tool_arguments(tool_call)
     spec = tool_info.get("spec") or {}
     parameters = spec.get("parameters") or {}
-    required = parameters.get("required") or []
-    properties = parameters.get("properties") or {}
-
     if name is None:
         return {
             "action": "ask",
@@ -124,36 +315,19 @@ def _validate_tool_input(
             "reason": "工具参数不是对象，需要用户确认是否继续。",
         }
 
-    for key in required:
-        if key not in arguments:
-            return {
-                "action": "ask",
-                "allowed": False,
-                "risk": "medium",
-                "stage": "validateInput",
-                "reason": f"工具参数缺少必需字段: {key}",
-            }
-
-    for key, value in arguments.items():
-        field_schema = properties.get(key) or {}
-        schema_type = field_schema.get("type")
-        if schema_type and not _schema_type_matches(value, str(schema_type)):
-            return {
-                "action": "ask",
-                "allowed": False,
-                "risk": "medium",
-                "stage": "validateInput",
-                "reason": f"字段 {key} 类型不符合 schema: expected {schema_type}",
-            }
-        enum = field_schema.get("enum")
-        if isinstance(enum, list) and value not in enum:
-            return {
-                "action": "ask",
-                "allowed": False,
-                "risk": "medium",
-                "stage": "validateInput",
-                "reason": f"字段 {key} 不在允许值范围内。",
-            }
+    if not isinstance(parameters, dict):
+        schema_error = "Tool parameter schema is invalid."
+    else:
+        schema_error = _validate_schema_value(arguments, parameters)
+    if schema_error is not None:
+        logger.debug("tool input schema validation failed: %s", schema_error)
+        return {
+            "action": "ask",
+            "allowed": False,
+            "risk": "medium",
+            "stage": "validateInput",
+            "reason": "Tool input does not match its schema.",
+        }
 
     return {
         "action": "passthrough",
@@ -291,16 +465,7 @@ async def _run_tool_call(
         )
         result = {"ok": False, "error": "Tool execution failed."}
 
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call.get("id", name),
-        "name": name,
-        "arguments": arguments,
-        "summary": _tool_summary(name, arguments),
-        "content": _tool_result_content(result),
-        "raw_result": result,
-        "created_at": time.time(),
-    }
+    return _message_with_result(tool_call, result)
 
 
 def _rebuild_tool_call(
@@ -423,9 +588,17 @@ async def _apply_result_hook(
                 "arguments": copy.deepcopy(_tool_arguments(tool_call)),
                 "result": copy.deepcopy(result),
                 "tool_call_id": tool_call.get("id", name),
+                # Retained for handlers written against the initial Task 3 API.
                 "retry_attempt": retry_attempt,
             },
-            metadata={"run_id": run_id},
+            metadata={
+                "run_id": run_id,
+                **(
+                    {"hook_retry_attempt": retry_attempt}
+                    if retry_attempt > 0
+                    else {}
+                ),
+            },
         )
     )
     diagnostics = _opaque_hook_errors(hook_result, event_name)
@@ -466,6 +639,7 @@ async def _run_tool_call_with_hooks(
     if hook_manager is None:
         return message, []
 
+    executed_message = message
     execution_failed = message["raw_result"].get("ok") is False
     message, hook_result, diagnostics, valid = await _apply_result_hook(
         tool_call=tool_call,
@@ -483,6 +657,24 @@ async def _run_tool_call_with_hooks(
         return message, diagnostics
 
     retry_call = _rebuild_tool_call(tool_call, message["name"], message["arguments"])
+    retry_validation = _validate_tool_input(
+        retry_call,
+        tools.get(message["name"] or "", {}),
+    )
+    if retry_validation.get("action") == "ask":
+        diagnostics.append(
+            _opaque_hook_error(
+                "tool.error",
+                handler_name="tool retry",
+                error_type="HookRetryRejected",
+                message="Tool hook retry was rejected.",
+            )
+        )
+        return executed_message, diagnostics
+
+    # Hook handlers are trusted Python extensions. Argument changes and retries
+    # intentionally occur after the authoritative permission gate; same-tool
+    # and schema validation constrain the effective call without re-reviewing it.
     diagnostics.append({"type": "hook_retry", "name": message["name"], "attempt": 1})
     executed_retry_message = await _run_tool_call(retry_call, tools, runtime_context)
     retry_message, retry_result, retry_diagnostics, _ = await _apply_result_hook(
@@ -541,6 +733,7 @@ async def run_tool_subagent(
     permission_prompter: PermissionPrompter | None = None,
     memory_context: str | None = None,
     runtime_context: dict[str, Any] | None = None,
+    *,
     hook_manager: HookManager | None = None,
     session_id: str = "",
     run_id: str = "",
@@ -645,6 +838,9 @@ async def run_tool_subagent(
 
             approved_call = tool_call
             if hook_manager is not None:
+                # Hook handlers are trusted Python extensions. tool.before runs
+                # after permission approval and may change arguments, but never
+                # the approved tool name; the effective call is schema-checked.
                 original_name = name or ""
                 hook_result = await hook_manager.emit(
                     HookEvent(

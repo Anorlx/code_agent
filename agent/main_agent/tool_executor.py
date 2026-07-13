@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -41,6 +42,7 @@ class StreamingToolExecutor:
         name: str | None
         parallel_safe: bool
         side_effectful: bool
+        effective_arguments: dict[str, Any] | None = None
         started_at: float | None = None
         finished_at: float | None = None
         status: ToolStatus = "queued"
@@ -106,11 +108,19 @@ class StreamingToolExecutor:
         for tracked in self._tracked:
             message = (tracked.result_event or {}).get("message") or {}
             result = message.get("raw_result") if isinstance(message, dict) else None
+            result_arguments = message.get("arguments") if isinstance(message, dict) else None
+            arguments = (
+                result_arguments
+                if isinstance(result_arguments, dict)
+                else tracked.effective_arguments
+                if tracked.effective_arguments is not None
+                else _tool_arguments(tracked.tool_call)
+            )
             states.append(
                 {
                     "tool_call_id": tracked.tool_call.get("id", tracked.name),
                     "name": tracked.name,
-                    "arguments": _tool_arguments(tracked.tool_call),
+                    "arguments": copy.deepcopy(arguments),
                     "status": tracked.status,
                     "parallel_safe": tracked.parallel_safe,
                     "side_effectful": tracked.side_effectful,
@@ -263,6 +273,10 @@ class StreamingToolExecutor:
                 if event.get("type") == "tool_result":
                     tracked.result_event = event
                     continue
+                if event.get("type") == "tool_start" and isinstance(
+                    event.get("arguments"), dict
+                ):
+                    tracked.effective_arguments = copy.deepcopy(event["arguments"])
                 await self._queue.put(event)
         except asyncio.CancelledError:
             tracked.status = "completed"

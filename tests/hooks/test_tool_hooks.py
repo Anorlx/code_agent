@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import inspect
 import json
 import unittest
 from unittest.mock import patch
@@ -58,6 +59,78 @@ def result_events(events):
 
 
 class ToolHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_before_recursively_validates_array_items_and_nested_objects(self):
+        schema = {
+            "type": "object",
+            "required": ["items", "config"],
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {"id": {"type": "string"}},
+                    },
+                },
+                "config": {
+                    "type": "object",
+                    "required": ["enabled"],
+                    "properties": {"enabled": {"type": "boolean"}},
+                },
+            },
+        }
+        invalid_arguments = [
+            {"items": [{"id": 7}], "config": {"enabled": True}},
+            {"items": [{"id": "ok"}], "config": {}},
+            {"items": [{"id": "ok"}], "config": {"enabled": "yes"}},
+        ]
+
+        for arguments in invalid_arguments:
+            with self.subTest(arguments=arguments):
+                calls = []
+                manager = HookManager()
+
+                async def modify(event, updated=arguments):
+                    return HookResult(
+                        action=HookAction.MODIFY,
+                        updated_payload={**event.payload, "arguments": updated},
+                    )
+
+                async def run(tool_arguments):
+                    calls.append(tool_arguments)
+                    return {"ok": True}
+
+                manager.register("tool.before", modify)
+                events = await collect_tool_events(
+                    [
+                        {
+                            "id": "nested-call",
+                            "name": "nested",
+                            "arguments": {
+                                "items": [{"id": "valid"}],
+                                "config": {"enabled": True},
+                            },
+                        }
+                    ],
+                    {
+                        "nested": {
+                            "run": run,
+                            "permission": "allow",
+                            "parallel_safe": True,
+                            "spec": {"parameters": schema},
+                        }
+                    },
+                    hook_manager=manager,
+                )
+
+                self.assertEqual(calls, [])
+                message = result_events(events)[0]["message"]
+                self.assertTrue(message["raw_result"]["hook_blocked"])
+                self.assertEqual(
+                    message["raw_result"]["error"],
+                    "Tool blocked by lifecycle hook policy.",
+                )
+
     async def test_before_invalid_modified_arguments_are_safely_blocked(self):
         invalid_payloads = [
             {
@@ -379,6 +452,77 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message["content"], "recovered")
         self.assertEqual(message["arguments"], {"n": 2})
 
+    async def test_error_retry_with_schema_invalid_arguments_is_rejected(self):
+        manager = HookManager()
+        calls = []
+
+        async def retry(event):
+            return HookResult(
+                action=HookAction.RETRY,
+                updated_payload={
+                    **event.payload,
+                    "arguments": {"n": "not-an-integer"},
+                },
+            )
+
+        async def run(arguments):
+            calls.append(arguments)
+            return {"ok": False, "error": "original safe failure"}
+
+        manager.register("tool.error", retry)
+        events = await collect_tool_events(
+            [{"id": "call-1", "name": "number", "arguments": {"n": 1}}],
+            number_tool(run),
+            hook_manager=manager,
+        )
+
+        self.assertEqual(calls, [{"n": 1}])
+        message = result_events(events)[0]["message"]
+        self.assertEqual(message["arguments"], {"n": 1})
+        self.assertEqual(
+            message["raw_result"],
+            {"ok": False, "error": "original safe failure"},
+        )
+        errors = [event for event in events if event.get("type") == "hook_error"]
+        self.assertTrue(
+            any(event["error_type"] == "HookRetryRejected" for event in errors)
+        )
+        self.assertFalse(any(event.get("type") == "hook_retry" for event in events))
+        self.assertNotIn("not-an-integer", json.dumps(errors))
+
+    async def test_retry_attempt_is_in_second_lifecycle_event_metadata(self):
+        manager = HookManager()
+        attempts = []
+        calls = 0
+
+        async def retry(event):
+            return HookResult(
+                action=HookAction.RETRY,
+                updated_payload={**event.payload, "arguments": {"n": 2}},
+            )
+
+        async def after(event):
+            attempts.append(event.metadata["hook_retry_attempt"])
+            return HookResult()
+
+        async def run(arguments):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"ok": False, "error": "retry"}
+            return {"ok": True, "content": "done"}
+
+        manager.register("tool.error", retry)
+        manager.register("tool.after", after)
+        events = await collect_tool_events(
+            [{"id": "call-1", "name": "number", "arguments": {"n": 1}}],
+            number_tool(run),
+            hook_manager=manager,
+        )
+
+        self.assertEqual(attempts, [1])
+        self.assertFalse(any(event.get("type") == "hook_error" for event in events))
+
     async def test_second_retry_request_hits_limit_and_returns_final_failure(self):
         manager = HookManager()
         calls = []
@@ -613,6 +757,51 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("hook_manager", checkpoint)
         self.assertNotIn("session_id", checkpoint)
         self.assertNotIn("run_id", checkpoint)
+
+    async def test_checkpoint_uses_hook_modified_arguments_while_tool_executes(self):
+        manager = HookManager()
+        runner_started = asyncio.Event()
+        release_runner = asyncio.Event()
+
+        async def before(event):
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={**event.payload, "arguments": {"n": 2}},
+            )
+
+        async def run(arguments):
+            runner_started.set()
+            await release_runner.wait()
+            return {"ok": True, "content": "done"}
+
+        manager.register("tool.before", before)
+        executor = StreamingToolExecutor(
+            user_input="run",
+            messages=[],
+            tools=number_tool(run),
+            permission_reviewer=None,
+            permission_prompter=None,
+            reviewer_model_name="reviewer",
+            memory_context=None,
+            runtime_context={},
+            hook_manager=manager,
+        )
+        executor.submit({"id": "call-1", "name": "number", "arguments": {"n": 1}})
+        await asyncio.wait_for(runner_started.wait(), timeout=1)
+
+        checkpoint = executor.checkpoint_tool_states()[0]
+        self.assertEqual(checkpoint["status"], "executing")
+        self.assertEqual(checkpoint["arguments"], {"n": 2})
+        self.assertNotIn("hook_manager", checkpoint)
+
+        release_runner.set()
+        await executor.finish()
+
+    def test_hook_runtime_parameters_are_keyword_only(self):
+        parameters = inspect.signature(run_tool_subagent).parameters
+
+        for name in ("hook_manager", "session_id", "run_id"):
+            self.assertEqual(parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
 
     async def test_graph_forwards_identical_hook_and_runtime_identity_to_executor(self):
         manager = HookManager()
