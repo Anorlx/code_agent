@@ -59,6 +59,46 @@ def result_events(events):
 
 
 class ToolHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_draft_2020_meta_schema_rejects_invalid_supported_shapes(self):
+        cases = [
+            ({"allOf": []}, {"anything": 1}),
+            (
+                {
+                    "type": "object",
+                    "properties": {
+                        "value": {"pattern": "["},
+                    },
+                },
+                {"value": {"not": "a string"}},
+            ),
+        ]
+
+        for parameters, arguments in cases:
+            with self.subTest(parameters=parameters):
+                calls = []
+
+                async def run(tool_arguments):
+                    calls.append(tool_arguments)
+                    return {"ok": True, "content": "must not run"}
+
+                events = await collect_tool_events(
+                    [{"id": "call-1", "name": "schema_tool", "arguments": arguments}],
+                    {
+                        "schema_tool": {
+                            "run": run,
+                            "permission": "allow",
+                            "parallel_safe": True,
+                            "spec": {"parameters": parameters},
+                        }
+                    },
+                )
+
+                self.assertEqual(calls, [])
+                message = result_events(events)[0]["message"]
+                self.assertFalse(message["raw_result"]["ok"])
+                self.assertEqual(message["raw_result"]["review"]["stage"], "validateInput")
+                self.assertNotIn(str(parameters), message["raw_result"]["error"])
+
     async def test_boolean_numeric_schema_constraints_fail_closed(self):
         cases = [
             ({"type": "array", "minItems": True}, [1, 2]),
