@@ -282,6 +282,11 @@ async def auto_compact(
     token_count: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     tail_user_message = messages[-1] if messages and messages[-1].get("role") == "user" else None
+    protected_hook_context = [
+        message
+        for message in messages
+        if message.get("type") == "hook_context" and message.get("protected") is True
+    ]
     if model_call is None:
         return collapse_context(messages, token_count=token_count)
 
@@ -316,6 +321,7 @@ async def auto_compact(
             "content": summary,
             "created_at": now_timestamp(),
         },
+        *protected_hook_context,
     ]
     if tail_user_message is not None:
         new_messages.append(tail_user_message)
@@ -395,7 +401,7 @@ async def manage_context(
                 )
             )
 
-        working.extend(
+        protected_context = [
             {
                 "role": "system",
                 "type": "hook_context",
@@ -405,7 +411,11 @@ async def manage_context(
             }
             for context in hook_result.additional_context
             if context
-        )
+        ]
+        if working and working[-1].get("role") == "user":
+            working[-1:-1] = protected_context
+        else:
+            working.extend(protected_context)
         token_count = estimate_tokens(working) + estimate_tokens(system_prompt)
         warning = token_warning_state(token_count, config)
 

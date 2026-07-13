@@ -344,6 +344,7 @@ async def _mark_checkpoint_terminal(
 async def _preprocess_node(state: AgentGraphState) -> dict[str, Any]:
     if state.get("turn", 0) >= state["max_turns"]:
         logger.info("agent max_turns reached turn=%s", state.get("turn", 0))
+        await _mark_checkpoint_terminal(state, "aborted", reason="max_turns")
         return _terminal_update(state, "max_turns", TERMINATION_MESSAGES["max_turns"])
 
     next_state: AgentGraphState = dict(state)
@@ -854,12 +855,16 @@ async def _termination_check_node(state: AgentGraphState) -> dict[str, Any]:
                 },
             )
             logger.info("agent.before_stop hook blocked completion")
-            return {
+            update = {
                 "messages": messages,
                 "termination_reason": None,
                 "terminal_message": None,
                 "phase": "stop_blocked",
             }
+            checkpoint_state: AgentGraphState = dict(state)
+            checkpoint_state.update(update)
+            await _save_checkpoint(checkpoint_state)
+            return update
 
     stop_hook = state.get("stop_hook")
     if stop_hook and stop_hook(_visible_state(state)):

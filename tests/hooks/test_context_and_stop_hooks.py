@@ -30,6 +30,10 @@ class RecordingCheckpointStore:
     def __init__(self) -> None:
         self.completed: list[str] = []
         self.aborted: list[tuple[str, str]] = []
+        self.saved: list[dict[str, object]] = []
+
+    async def save_checkpoint(self, **kwargs) -> None:
+        self.saved.append(kwargs)
 
     async def mark_completed(self, run_id: str) -> None:
         self.completed.append(run_id)
@@ -200,6 +204,38 @@ class ContextBeforeCompactHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(protected[0]["role"], "system")
         self.assertIs(protected[0]["protected"], True)
         self.assertEqual(protected[0]["content"], "retain this fact")
+
+    async def test_active_user_turn_and_protected_context_survive_auto_compaction(self) -> None:
+        manager = HookManager()
+        model = RecordingCompactionModel()
+        active_request = "DISTINCTIVE CURRENT USER REQUEST"
+        messages = [
+            {"role": "assistant", "content": "old context " + "x" * 400},
+            {"role": "user", "content": active_request},
+        ]
+
+        async def add_context(event: HookEvent) -> HookResult:
+            return HookResult(additional_context=["protected stop feedback"])
+
+        manager.register("context.before_compact", add_context)
+        result, _ = await manage_context(
+            messages,
+            system_prompt="s",
+            model_call=model,
+            config=tiny_config(),
+            hook_manager=manager,
+        )
+
+        prompt_messages = json.loads(
+            model.requests[0]["messages"][0]["content"]
+        )["messages"]
+        self.assertEqual(prompt_messages[-2]["type"], "hook_context")
+        self.assertEqual(prompt_messages[-1]["content"], active_request)
+        self.assertEqual(result[-2]["type"], "hook_context")
+        self.assertIs(result[-2]["protected"], True)
+        self.assertEqual(result[-2]["content"], "protected stop feedback")
+        self.assertEqual(result[-1]["role"], "user")
+        self.assertEqual(result[-1]["content"], active_request)
 
     async def test_invalid_modified_messages_preserve_input_and_report_safe_failure(self) -> None:
         manager = HookManager()
@@ -381,6 +417,15 @@ class AgentBeforeStopHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(update["messages"][-1]["protected"], True)
         self.assertEqual(store.completed, [])
         self.assertEqual(store.aborted, [])
+        self.assertEqual(len(store.saved), 1)
+        self.assertEqual(store.saved[0]["status"], "running")
+        self.assertEqual(store.saved[0]["phase"], "stop_blocked")
+        saved_state = store.saved[0]["state"]
+        self.assertEqual(saved_state["phase"], "stop_blocked")
+        self.assertEqual(saved_state["messages"][-1]["type"], "hook_context")
+        self.assertEqual(
+            saved_state["messages"][-1]["content"], "try another approach"
+        )
         self.assertEqual(_route_after_termination_check(update), "preprocess")
         blocked = next(event for event in events if event.get("type") == "hook_blocked")
         self.assertEqual(
@@ -392,6 +437,41 @@ class AgentBeforeStopHookTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertNotIn(secret, json.dumps(events))
+
+    async def test_final_turn_block_is_checkpointed_then_max_turns_aborts_run(self) -> None:
+        manager = HookManager()
+        store = RecordingCheckpointStore()
+        events: list[dict[str, object]] = []
+        calls: list[str] = []
+
+        async def block(event: HookEvent) -> HookResult:
+            calls.append(event.name)
+            return HookResult(
+                action=HookAction.BLOCK,
+                reason="retry once",
+                additional_context=["safe final feedback"],
+            )
+
+        manager.register("agent.before_stop", block)
+        state = graph_state(
+            hook_manager=manager,
+            checkpoint_store=store,
+            event_sink=events.append,
+            turn=3,
+            max_turns=3,
+        )
+
+        blocked = await _termination_check_node(state)
+        terminal = await _preprocess_node({**state, **blocked})
+
+        self.assertEqual(calls, ["agent.before_stop"])
+        self.assertEqual(len(store.saved), 1)
+        self.assertEqual(store.saved[0]["status"], "running")
+        self.assertEqual(store.saved[0]["phase"], "stop_blocked")
+        self.assertEqual(store.aborted, [("run-1", "max_turns")])
+        self.assertEqual(terminal["termination_reason"], "max_turns")
+        terminal_events = [event for event in events if event.get("type") == "terminal"]
+        self.assertEqual(terminal_events[-1]["reason"], "max_turns")
 
     async def test_continue_completes_and_marks_checkpoint(self) -> None:
         manager = HookManager()
