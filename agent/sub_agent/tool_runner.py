@@ -5,10 +5,10 @@ import copy
 import json
 import logging
 import time
+import warnings
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
+from jsonschema.validators import validator_for
 
 from agent.hooks import HookAction, HookEvent, HookManager, HookResult
 from agent.sub_agent.context_builder import build_task_context, task_context_report
@@ -117,12 +117,14 @@ def _validate_tool_input(
         schema_error_type = "InvalidSchemaType"
     else:
         try:
-            Draft202012Validator.check_schema(parameters)
-            Draft202012Validator(parameters).validate(arguments)
-        except (SchemaError, ValidationError) as error:
+            with warnings.catch_warnings(record=True) as schema_warnings:
+                warnings.simplefilter("always")
+                ValidatorClass = validator_for(parameters)
+                ValidatorClass.check_schema(parameters)
+                ValidatorClass(parameters).validate(arguments)
+            schema_error_type = "UnknownSchemaDialect" if schema_warnings else None
+        except Exception as error:
             schema_error_type = type(error).__name__
-        else:
-            schema_error_type = None
     if schema_error_type is not None:
         logger.debug(
             "tool input schema validation failed error_type=%s",

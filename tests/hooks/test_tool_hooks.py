@@ -5,6 +5,8 @@ import json
 import unittest
 from unittest.mock import patch
 
+from jsonschema import Draft7Validator
+
 from agent.hooks import HookAction, HookEvent, HookManager, HookResult
 from agent.main_agent.graph import _api_call_node
 from agent.main_agent.tool_executor import StreamingToolExecutor
@@ -59,6 +61,109 @@ def result_events(events):
 
 
 class ToolHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unresolvable_remote_ref_is_safely_blocked(self):
+        calls = []
+        remote_uri = "https://schemas.invalid/private-schema-value"
+
+        async def run(arguments):
+            calls.append(arguments)
+            return {"ok": True, "content": "must not run"}
+
+        events = await collect_tool_events(
+            [{"id": "call-1", "name": "schema_tool", "arguments": {"secret": 1}}],
+            {
+                "schema_tool": {
+                    "run": run,
+                    "permission": "allow",
+                    "parallel_safe": True,
+                    "spec": {"parameters": {"$ref": remote_uri}},
+                }
+            },
+        )
+
+        self.assertEqual(calls, [])
+        message = result_events(events)[0]["message"]
+        self.assertFalse(message["raw_result"]["ok"])
+        self.assertNotIn(remote_uri, message["raw_result"]["error"])
+        self.assertNotIn("private-schema-value", json.dumps(events))
+
+    async def test_declared_draft_7_uses_tuple_items_semantics(self):
+        calls = []
+        parameters = {
+            "$schema": Draft7Validator.META_SCHEMA["$id"],
+            "type": "object",
+            "properties": {
+                "tuple": {
+                    "type": "array",
+                    "items": [{"type": "integer"}, {"type": "string"}],
+                    "additionalItems": False,
+                }
+            },
+            "required": ["tuple"],
+        }
+
+        async def run(arguments):
+            calls.append(arguments)
+            return {"ok": True, "content": "accepted"}
+
+        tools = {
+            "schema_tool": {
+                "run": run,
+                "permission": "allow",
+                "parallel_safe": True,
+                "spec": {"parameters": parameters},
+            }
+        }
+        valid = {"tuple": [1, "two"]}
+        valid_events = await collect_tool_events(
+            [{"id": "valid", "name": "schema_tool", "arguments": valid}],
+            tools,
+        )
+        invalid_events = await collect_tool_events(
+            [
+                {
+                    "id": "invalid",
+                    "name": "schema_tool",
+                    "arguments": {"tuple": [1, "two", 3]},
+                }
+            ],
+            tools,
+        )
+
+        self.assertEqual(calls, [valid])
+        self.assertEqual(result_events(valid_events)[0]["message"]["content"], "accepted")
+        self.assertFalse(result_events(invalid_events)[0]["message"]["raw_result"]["ok"])
+
+    async def test_unknown_declared_schema_dialect_fails_closed(self):
+        calls = []
+        unknown_uri = "https://schemas.invalid/unknown-private-dialect"
+
+        async def run(arguments):
+            calls.append(arguments)
+            return {"ok": True}
+
+        events = await collect_tool_events(
+            [{"id": "call-1", "name": "schema_tool", "arguments": {}}],
+            {
+                "schema_tool": {
+                    "run": run,
+                    "permission": "allow",
+                    "parallel_safe": True,
+                    "spec": {
+                        "parameters": {
+                            "$schema": unknown_uri,
+                            "type": "object",
+                        }
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(calls, [])
+        message = result_events(events)[0]["message"]
+        self.assertFalse(message["raw_result"]["ok"])
+        self.assertNotIn(unknown_uri, json.dumps(events))
+
     async def test_draft_2020_meta_schema_rejects_invalid_supported_shapes(self):
         cases = [
             ({"allOf": []}, {"anything": 1}),
