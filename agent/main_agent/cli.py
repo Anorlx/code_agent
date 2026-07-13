@@ -7,7 +7,7 @@ import sys
 import time
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from agent.hooks import (
     HookEvent,
@@ -39,6 +39,8 @@ from agent.tools.registry import get_tool_registry
 from agent.tools.skills.registry import load_skill_registry, resolve_skill_slash
 
 logger = logging.getLogger(__name__)
+
+SessionRuntimeOutcome = Literal["completed", "input_interrupted"]
 
 
 @dataclass
@@ -1080,7 +1082,7 @@ async def _run_session_runtime(
     summary_tasks: set[asyncio.Task[Any]],
     memory_observer: MemoryObserver,
     state: SessionRuntimeState,
-) -> None:
+) -> SessionRuntimeOutcome:
     try:
         tool_load_result = await tools_task
         tools = tool_load_result.tools
@@ -1136,13 +1138,11 @@ async def _run_session_runtime(
                 state.status = "aborted"
                 print(ui.event_line("terminal", "aborted_streaming", "red"))
                 logger.info("chat_loop aborted while reading input")
-                return
+                return "input_interrupted"
         if user_input.lower() in {"exit", "quit"}:
             state.termination_reason = "user_exit"
             state.status = "completed"
-            print(ui.event_line("terminal", "completed", "green"))
-            logger.info("chat_loop completed by user command")
-            return
+            return "completed"
         if not user_input:
             continue
         if user_input.startswith("/@"):
@@ -1247,11 +1247,12 @@ async def _run_selected_session(
     state = SessionRuntimeState(history, main_agent_saved_memory)
     runtime_failed = False
     memory_observer: MemoryObserver | None = None
+    outcome: SessionRuntimeOutcome | None = None
     try:
         memory_observer = MemoryObserver(model_call=dashscope_stream_chat)
         for event in start_events or []:
             _print_event(event, ui)
-        await _run_session_runtime(
+        outcome = await _run_session_runtime(
             max_turns=max_turns,
             startup_started=startup_started,
             session_setup_ms=session_setup_ms,
@@ -1309,6 +1310,9 @@ async def _run_selected_session(
             if not runtime_failed:
                 raise
             logger.exception("session shutdown failed after runtime failure")
+    if outcome == "completed":
+        print(ui.event_line("terminal", "completed", "green"))
+        logger.info("chat_loop completed by user command")
 
 
 async def chat_loop(max_turns: int, color: bool = False) -> None:

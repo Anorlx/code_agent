@@ -3,14 +3,18 @@ import io
 import json
 import unittest
 from contextlib import redirect_stdout
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from agent.hooks import HookAction, HookEvent, HookManager, HookResult
 from agent.main_agent.cli import (
     SessionEndState,
+    SessionRuntimeState,
+    ToolLoadResult,
     _create_query_engine,
     _print_event,
     _run_selected_session,
+    _run_session_runtime,
     _shutdown_background_tasks,
     emit_session_end,
     emit_session_start,
@@ -385,6 +389,165 @@ class SessionEndHookTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SessionCliIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_exit_returns_completion_without_reporting_it(self) -> None:
+        tools_task = asyncio.get_running_loop().create_future()
+        tools_task.set_result(
+            ToolLoadResult(
+                tools={},
+                refresh_task=None,
+                metrics={
+                    "tools_total": 0,
+                    "mcp_cache_hit": False,
+                    "mcp_servers_loaded": 0,
+                    "mcp_servers_total": 0,
+                },
+            )
+        )
+        reader = SimpleNamespace(name="test", read=AsyncMock(return_value="exit"))
+        state = SessionRuntimeState([], False)
+
+        with (
+            patch("agent.main_agent.cli.create_terminal_input", return_value=reader),
+            patch("builtins.print") as print_mock,
+            patch("agent.main_agent.cli.logger.info") as info_mock,
+        ):
+            outcome = await _run_session_runtime(
+                max_turns=4,
+                startup_started=0.0,
+                session_setup_ms=0,
+                session_select_ms=0,
+                tools_task=tools_task,
+                session_store=object(),
+                checkpoint_store=object(),
+                session_record=session_record(),
+                pending_user_input=None,
+                hook_manager=HookManager(),
+                ui=TerminalUI(color=False),
+                summary_tasks=set(),
+                memory_observer=AsyncMock(),
+                state=state,
+            )
+
+        self.assertEqual(outcome, "completed")
+        self.assertFalse(
+            any("completed" in str(call.args) for call in print_mock.call_args_list)
+        )
+        self.assertFalse(
+            any("completed" in str(call.args) for call in info_mock.call_args_list)
+        )
+
+    async def test_explicit_completion_is_reported_after_end_and_drain(self) -> None:
+        manager = HookManager()
+        observer = AsyncMock()
+        order: list[str] = []
+        tools_task = asyncio.get_running_loop().create_future()
+        tools_task.set_result(None)
+        ui = TerminalUI(color=False)
+
+        async def runtime(**kwargs) -> str:
+            order.append("runtime")
+            kwargs["state"].termination_reason = "user_exit"
+            kwargs["state"].status = "completed"
+            return "completed"
+
+        async def on_end(event: HookEvent) -> HookResult:
+            order.append("end")
+            return HookResult()
+
+        async def drain() -> None:
+            order.append("drain")
+
+        def event_line(label, text="", color="cyan") -> str:
+            if label == "terminal" and text == "completed":
+                order.append("terminal")
+            return f"{label} {text}"
+
+        def log(message, *args) -> None:
+            if message == "chat_loop completed by user command":
+                order.append("log")
+
+        manager.register("session.end", on_end)
+        observer.drain.side_effect = drain
+
+        with (
+            patch("agent.main_agent.cli.MemoryObserver", return_value=observer),
+            patch("agent.main_agent.cli._run_session_runtime", side_effect=runtime),
+            patch("agent.main_agent.cli._print_event"),
+            patch.object(ui, "event_line", side_effect=event_line),
+            patch("agent.main_agent.cli.logger.info", side_effect=log),
+            patch("builtins.print"),
+        ):
+            await _run_selected_session(
+                max_turns=4,
+                startup_started=0.0,
+                session_setup_ms=0,
+                session_select_ms=0,
+                tools_task=tools_task,
+                session_store=object(),
+                checkpoint_store=object(),
+                session_record=session_record(),
+                history=[],
+                pending_user_input=None,
+                main_agent_saved_memory=False,
+                hook_manager=manager,
+                ui=ui,
+            )
+
+        self.assertEqual(order, ["runtime", "end", "drain", "terminal", "log"])
+
+    async def test_drain_failure_suppresses_explicit_completion_report(self) -> None:
+        manager = HookManager()
+        observer = AsyncMock()
+        reported: list[str] = []
+        tools_task = asyncio.get_running_loop().create_future()
+        tools_task.set_result(None)
+        ui = TerminalUI(color=False)
+
+        async def runtime(**kwargs) -> str:
+            kwargs["state"].termination_reason = "user_exit"
+            kwargs["state"].status = "completed"
+            return "completed"
+
+        async def drain() -> None:
+            raise RuntimeError("drain failed")
+
+        def event_line(label, text="", color="cyan") -> str:
+            if label == "terminal" and text == "completed":
+                reported.append("terminal")
+            return f"{label} {text}"
+
+        def log(message, *args) -> None:
+            if message == "chat_loop completed by user command":
+                reported.append("log")
+
+        observer.drain.side_effect = drain
+
+        with (
+            patch("agent.main_agent.cli.MemoryObserver", return_value=observer),
+            patch("agent.main_agent.cli._run_session_runtime", side_effect=runtime),
+            patch("agent.main_agent.cli._print_event"),
+            patch.object(ui, "event_line", side_effect=event_line),
+            patch("agent.main_agent.cli.logger.info", side_effect=log),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "drain failed"):
+                await _run_selected_session(
+                    max_turns=4,
+                    startup_started=0.0,
+                    session_setup_ms=0,
+                    session_select_ms=0,
+                    tools_task=tools_task,
+                    session_store=object(),
+                    checkpoint_store=object(),
+                    session_record=session_record(),
+                    history=[],
+                    pending_user_input=None,
+                    main_agent_saved_memory=False,
+                    hook_manager=manager,
+                    ui=ui,
+                )
+
+        self.assertEqual(reported, [])
+
     async def test_start_event_render_failure_emits_end(self) -> None:
         manager = HookManager()
         ended: list[dict[str, object]] = []
