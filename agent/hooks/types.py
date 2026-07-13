@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Literal
@@ -45,12 +46,12 @@ class HookEvent:
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     def copied(self, payload: dict[str, Any]) -> HookEvent:
-        """Return an event with independent top-level payload and metadata."""
+        """Return an event with independent nested payload and metadata."""
         return HookEvent(
             name=self.name,
             session_id=self.session_id,
-            payload=dict(payload),
-            metadata=dict(self.metadata),
+            payload=deepcopy(payload),
+            metadata=deepcopy(self.metadata),
         )
 
 

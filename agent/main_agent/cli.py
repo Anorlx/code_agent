@@ -101,30 +101,44 @@ async def emit_session_start(
     recovered: bool,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Emit session.start and return a validated, caller-independent payload."""
+    events: list[dict[str, Any]] = []
+    try:
+        original_history = deepcopy(history)
+    except Exception:
+        original_history = list(history)
+        events.append(_lifecycle_payload_error("session.start"))
     original = {
-        "session_id": session_record.id,
-        "title": session_record.title,
-        "history": deepcopy(history),
-        "recovered": recovered,
+        "session_id": str(session_record.id),
+        "title": str(session_record.title),
+        "history": original_history,
+        "recovered": bool(recovered),
     }
     if hook_manager is None:
-        return deepcopy(original), []
+        return original, events
 
     result = await hook_manager.emit(
-        HookEvent("session.start", session_record.id, deepcopy(original))
+        HookEvent("session.start", original["session_id"], original)
     )
-    events = [
+    events.extend(
         _lifecycle_hook_error_event("session.start", failure)
         for failure in result.failures
-    ]
+    )
     candidate = result.updated_payload or {}
-    validated = deepcopy(original)
+    validated = {
+        "session_id": original["session_id"],
+        "title": original["title"],
+        "history": original["history"],
+        "recovered": original["recovered"],
+    }
 
-    if "session_id" in candidate and candidate["session_id"] != session_record.id:
+    if "session_id" in candidate and candidate["session_id"] != original["session_id"]:
         events.append(_lifecycle_payload_error("session.start"))
     if "title" in candidate:
         if isinstance(candidate["title"], str):
-            validated["title"] = candidate["title"]
+            try:
+                validated["title"] = str(candidate["title"])
+            except Exception:
+                events.append(_lifecycle_payload_error("session.start"))
         else:
             events.append(_lifecycle_payload_error("session.start"))
     if "history" in candidate:
@@ -140,7 +154,7 @@ async def emit_session_start(
             events.append(_lifecycle_payload_error("session.start"))
     if "recovered" in candidate:
         if isinstance(candidate["recovered"], bool):
-            validated["recovered"] = candidate["recovered"]
+            validated["recovered"] = bool(candidate["recovered"])
         else:
             events.append(_lifecycle_payload_error("session.start"))
 
@@ -167,7 +181,7 @@ async def emit_session_start(
             "status": "continued",
         }
     )
-    return deepcopy(validated), events
+    return validated, events
 
 
 async def emit_session_end(

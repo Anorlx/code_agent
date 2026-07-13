@@ -213,6 +213,78 @@ class HookManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [({"value": 1}, {"source": "caller"})])
         self.assertEqual(result.updated_payload, {"value": 1})
 
+    async def test_each_handler_receives_nested_copies(self) -> None:
+        manager = HookManager()
+        caller_payload = {"nested": {"values": [1]}}
+        caller_metadata = {"nested": {"source": "caller"}}
+        seen: list[tuple[dict[str, object], dict[str, object]]] = []
+
+        async def mutates(event: HookEvent) -> HookResult:
+            event.payload["nested"]["values"].append(2)
+            event.metadata["nested"]["source"] = "handler"
+            return HookResult()
+
+        async def observes(event: HookEvent) -> HookResult:
+            seen.append((event.payload, event.metadata))
+            return HookResult()
+
+        manager.register("session.start", mutates)
+        manager.register("session.start", observes)
+
+        result = await manager.emit(
+            HookEvent("session.start", "s1", caller_payload, caller_metadata)
+        )
+
+        self.assertEqual(caller_payload, {"nested": {"values": [1]}})
+        self.assertEqual(caller_metadata, {"nested": {"source": "caller"}})
+        self.assertEqual(
+            seen,
+            [
+                (
+                    {"nested": {"values": [1]}},
+                    {"nested": {"source": "caller"}},
+                )
+            ],
+        )
+        self.assertEqual(result.updated_payload, {"nested": {"values": [1]}})
+
+    async def test_noncopyable_event_is_isolated_and_dispatch_continues(self) -> None:
+        manager = HookManager()
+        calls: list[str] = []
+
+        class FailsFirstCopy:
+            copy_attempts = 0
+
+            def __deepcopy__(self, memo):
+                type(self).copy_attempts += 1
+                if type(self).copy_attempts == 1:
+                    raise TypeError("private copy failure")
+                return "safe copy"
+
+        value = FailsFirstCopy()
+
+        async def skipped(event: HookEvent) -> HookResult:
+            calls.append("first")
+            return HookResult()
+
+        async def later(event: HookEvent) -> HookResult:
+            calls.append("later")
+            self.assertEqual(event.payload["value"], "safe copy")
+            return HookResult()
+
+        manager.register("session.start", skipped, name="first handler")
+        manager.register("session.start", later, name="later handler")
+
+        result = await manager.emit(
+            HookEvent("session.start", "s1", {"value": value})
+        )
+
+        self.assertEqual(calls, ["later"])
+        self.assertIs(result.updated_payload["value"], value)
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(result.failures[0].handler_name, "first handler")
+        self.assertEqual(result.failures[0].error_type, "TypeError")
+
     async def test_handler_failures_from_results_are_aggregated(self) -> None:
         manager = HookManager()
         supplied = HookFailure("nested", "Warning", "reported")

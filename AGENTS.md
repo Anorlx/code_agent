@@ -31,9 +31,11 @@ The eight supported events are:
 
 `CONTINUE` is the default. `MODIFY` requires a dictionary payload, `BLOCK` requires a nonempty reason, and `RETRY` is valid only for `tool.error`; runtime integrations may impose stricter event-specific limits described above. Handler timeouts, exceptions, and invalid results are isolated and reported opaquely.
 
+Handlers must not mutate `HookEvent.payload` or `HookEvent.metadata` directly. Return `HookResult(action=HookAction.MODIFY, updated_payload=...)` when an event permits changes.
+
 Permission review is authoritative and occurs before `tool.before`. Python hook handlers are trusted extensions, but payload schemas, immutable tool names, and retry limits still apply. External command hooks are out of scope. JSON Schema validation must not retrieve external references.
 
-Public hook events and logs must never include prompts, tool arguments, tool results, block/retry reasons, credentials, secrets, or raw exception messages. Emit only safe structural fields such as event name, handler name, error type, status, and bounded counters.
+Hook handlers, public hook events, and logging must never record prompts, tool arguments, tool results, block/retry reasons, credentials, secrets, raw payloads, or raw exception messages. Emit only safe structural fields such as event name, handler name, error type, status, and bounded counters.
 
 ## Verification
 

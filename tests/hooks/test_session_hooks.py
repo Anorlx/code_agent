@@ -57,6 +57,7 @@ class SessionStartHookTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(history[0]["content"]["text"], "private prompt")
         self.assertIsNot(payload["history"], history)
+        self.assertEqual(payload["history"][0]["content"]["text"], "private prompt")
         self.assertTrue(payload["recovered"])
         self.assertEqual(events[-1]["type"], "session_hook")
 
@@ -163,6 +164,33 @@ class SessionStartHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["title"], "private title")
         self.assertTrue(any(event["type"] == "hook_error" for event in events))
         self.assertNotIn("private noncopyable detail", json.dumps(events))
+
+    async def test_string_subclass_is_normalized_before_copying(self) -> None:
+        class HostileString(str):
+            def __deepcopy__(self, memo):
+                raise TypeError("private title copy failure")
+
+        manager = HookManager()
+
+        async def modify(event: HookEvent) -> HookResult:
+            self.assertIs(type(event.payload["title"]), str)
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={"title": HostileString("modified title")},
+            )
+
+        manager.register("session.start", modify)
+
+        payload, events = await emit_session_start(
+            manager,
+            session_record(title=HostileString("original title")),
+            [],
+            recovered=False,
+        )
+
+        self.assertEqual(payload["title"], "modified title")
+        self.assertIs(type(payload["title"]), str)
+        self.assertNotIn("private title copy failure", json.dumps(events))
 
     async def test_block_does_not_abort_start_or_expose_reason(self) -> None:
         manager = HookManager()
