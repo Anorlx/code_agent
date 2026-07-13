@@ -66,6 +66,16 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
                 "tool_call_id": "call-1",
             },
             {"arguments": {"n": 2}, "tool_call_id": "call-1"},
+            {
+                "tool_name": "number",
+                "arguments": {"n": "not-an-integer"},
+                "tool_call_id": "call-1",
+            },
+            {
+                "tool_name": "number",
+                "arguments": {},
+                "tool_call_id": "call-1",
+            },
         ]
 
         for invalid_payload in invalid_payloads:
