@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import time
@@ -11,6 +12,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
+from agent.hooks import HookAction, HookEvent, HookManager
 from agent.main_agent.checkpoint_store import CheckpointStore
 from agent.main_agent.config import DEFAULT_MAIN_MODEL, DEFAULT_SUB_AGENT_MODEL
 from agent.main_agent.context_manager import ContextConfig, manage_context, snip_tool_results
@@ -99,6 +101,7 @@ class AgentGraphState(TypedDict, total=False):
     planned_tool_call: dict[str, Any] | None
     frozen_system_prompt: str
     prompt_cache_report: dict[str, Any] | None
+    hook_manager: HookManager | None
 
 
 def _message_token_estimate(messages: list[dict[str, Any]]) -> int:
@@ -157,6 +160,38 @@ def _emit(state: AgentGraphState, event: dict[str, Any]) -> None:
     sink = state.get("event_sink")
     if sink is not None:
         sink(event)
+
+
+def _emit_hook_error(
+    state: AgentGraphState,
+    event_name: str,
+    handler_name: str,
+    error_type: str,
+) -> None:
+    _emit(
+        state,
+        {
+            "type": "hook_error",
+            "event_name": event_name,
+            "handler_name": handler_name,
+            "error_type": error_type,
+            "message": f"Hook handler failed during {event_name}.",
+        },
+    )
+
+
+def _protected_hook_messages(context: list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "system",
+            "type": "hook_context",
+            "protected": True,
+            "content": item,
+            "created_at": time.time(),
+        }
+        for item in context
+        if item
+    ]
 
 
 def _emit_state(state: AgentGraphState, phase: str, **extra: Any) -> None:
@@ -309,6 +344,7 @@ async def _mark_checkpoint_terminal(
 async def _preprocess_node(state: AgentGraphState) -> dict[str, Any]:
     if state.get("turn", 0) >= state["max_turns"]:
         logger.info("agent max_turns reached turn=%s", state.get("turn", 0))
+        await _mark_checkpoint_terminal(state, "aborted", reason="max_turns")
         return _terminal_update(state, "max_turns", TERMINATION_MESSAGES["max_turns"])
 
     next_state: AgentGraphState = dict(state)
@@ -317,6 +353,9 @@ async def _preprocess_node(state: AgentGraphState) -> dict[str, Any]:
         system_prompt=_system_prompt(state),
         model_call=state.get("model_call"),
         config=state.get("context_config"),
+        hook_manager=state.get("hook_manager"),
+        session_id=state.get("session_id") or "",
+        run_id=state.get("run_id", ""),
     )
     next_state["messages"] = managed_messages
     next_state["context_report"] = context_report
@@ -324,6 +363,13 @@ async def _preprocess_node(state: AgentGraphState) -> dict[str, Any]:
     next_state["phase"] = "预处理"
     await _save_checkpoint(next_state)
     _emit_state(next_state, "预处理", context_report=context_report)
+    for failure in context_report.get("hook_failures", []):
+        _emit_hook_error(
+            next_state,
+            str(failure.get("event") or "context.before_compact"),
+            str(failure.get("handler_name") or "context.before_compact handler"),
+            str(failure.get("error_type") or "HookError"),
+        )
     if context_report.get("actions"):
         _emit(
             next_state,
@@ -490,6 +536,9 @@ async def _api_call_node(state: AgentGraphState) -> dict[str, Any]:
         permission_prompter=state.get("permission_prompter"),
         reviewer_model_name=state["reviewer_model_name"],
         memory_context=state.get("memory_context"),
+        hook_manager=state.get("hook_manager"),
+        session_id=state.get("session_id") or "",
+        run_id=state.get("run_id") or "",
         runtime_context={
             "user_input": state["user_input"],
             "messages": state["messages"],
@@ -699,15 +748,6 @@ async def _result_backfill_node(state: AgentGraphState) -> dict[str, Any]:
         )
     _emit_state(next_state, "结果回填", tool_results=state.get("tool_results", []))
 
-    stop_hook = state.get("stop_hook")
-    if stop_hook and stop_hook(_visible_state(next_state)):
-        logger.info("tool hook stopped after result backfill")
-        return {
-            **_terminal_update(next_state, "hook_stopped", TERMINATION_MESSAGES["hook_stopped"]),
-            "messages": messages,
-            "main_agent_saved_memory": next_state["main_agent_saved_memory"],
-        }
-
     logger.info(
         "result_backfill done tool_results=%s main_agent_saved_memory=%s",
         len(tool_results),
@@ -786,18 +826,80 @@ async def _verification_node(state: AgentGraphState) -> dict[str, Any]:
 
 async def _termination_check_node(state: AgentGraphState) -> dict[str, Any]:
     _emit_state(state, "终止检查")
-    stop_hook = state.get("stop_hook")
-    if stop_hook and stop_hook(_visible_state(state)):
+    terminal_state = state
+    protected_context: list[dict[str, Any]] = []
+    hook_manager = state.get("hook_manager")
+    if hook_manager is not None:
+        hook_result = await hook_manager.emit(
+            HookEvent(
+                "agent.before_stop",
+                state.get("session_id") or "",
+                deepcopy(_visible_state(state)),
+                {"run_id": state.get("run_id", "")},
+            )
+        )
+        for failure in hook_result.failures:
+            _emit_hook_error(
+                state,
+                "agent.before_stop",
+                failure.handler_name,
+                failure.error_type,
+            )
+        protected_context = _protected_hook_messages(
+            hook_result.additional_context
+        )
+        if protected_context:
+            terminal_state = dict(state)
+            terminal_state["messages"] = [
+                *state.get("messages", []),
+                *protected_context,
+            ]
+        if hook_result.action is HookAction.BLOCK:
+            messages = list(terminal_state.get("messages", []))
+            _emit(
+                state,
+                {
+                    "type": "hook_blocked",
+                    "event_name": "agent.before_stop",
+                    "message": "Hook policy blocked agent stopping.",
+                },
+            )
+            logger.info("agent.before_stop hook blocked completion")
+            update = {
+                "messages": messages,
+                "termination_reason": None,
+                "terminal_message": None,
+                "phase": "stop_blocked",
+            }
+            checkpoint_state: AgentGraphState = dict(state)
+            checkpoint_state.update(update)
+            await _save_checkpoint(checkpoint_state)
+            return update
+
+    stop_hook = terminal_state.get("stop_hook")
+    if stop_hook and stop_hook(_visible_state(terminal_state)):
         logger.info("stop_hook prevented completion")
-        await _mark_checkpoint_terminal(state, "aborted", reason="stop_hook_prevented")
-        return _terminal_update(
-            state,
+        await _mark_checkpoint_terminal(
+            terminal_state, "aborted", reason="stop_hook_prevented"
+        )
+        update = _terminal_update(
+            terminal_state,
             "stop_hook_prevented",
             TERMINATION_MESSAGES["stop_hook_prevented"],
         )
+        if protected_context:
+            update["messages"] = terminal_state["messages"]
+        return update
     logger.info("agent completed turn=%s", state.get("turn"))
-    await _mark_checkpoint_terminal(state, "completed", reason="completed")
-    return _terminal_update(state, "completed", TERMINATION_MESSAGES["completed"])
+    await _mark_checkpoint_terminal(
+        terminal_state, "completed", reason="completed"
+    )
+    update = _terminal_update(
+        terminal_state, "completed", TERMINATION_MESSAGES["completed"]
+    )
+    if protected_context:
+        update["messages"] = terminal_state["messages"]
+    return update
 
 
 def _route_after_preprocess(state: AgentGraphState) -> Literal["api_call", "__end__"]:
@@ -826,6 +928,14 @@ def _route_after_verify(state: AgentGraphState) -> Literal["preprocess", "__end_
     return "preprocess"
 
 
+def _route_after_termination_check(
+    state: AgentGraphState,
+) -> Literal["preprocess", "__end__"]:
+    if state.get("termination_reason"):
+        return END
+    return "preprocess"
+
+
 def build_agent_graph():
     graph = StateGraph(AgentGraphState)
     graph.add_node("preprocess", _preprocess_node)
@@ -837,7 +947,7 @@ def build_agent_graph():
     graph.add_edge(START, "preprocess")
     graph.add_conditional_edges("preprocess", _route_after_preprocess)
     graph.add_conditional_edges("api_call", _route_after_api_call)
-    graph.add_edge("termination_check", END)
+    graph.add_conditional_edges("termination_check", _route_after_termination_check)
     graph.add_conditional_edges("result_backfill", _route_after_result_backfill)
     graph.add_conditional_edges("verify", _route_after_verify)
     return graph.compile()
@@ -862,6 +972,7 @@ def _initial_graph_state(
     context_config: ContextConfig | None = None,
     checkpoint_store: CheckpointStore | None = None,
     session_id: str | None = None,
+    hook_manager: HookManager | None = None,
 ) -> AgentGraphState:
     state = new_state(user_input, history)
     run_id = uuid.uuid4().hex
@@ -892,6 +1003,7 @@ def _initial_graph_state(
         "verification_attempts": 0,
         "frozen_system_prompt": SYSTEM_PROMPT,
         "prompt_cache_report": None,
+        "hook_manager": hook_manager,
     }
 
 
@@ -913,6 +1025,7 @@ async def run_agent(
     context_config: ContextConfig | None = None,
     checkpoint_store: CheckpointStore | None = None,
     session_id: str | None = None,
+    hook_manager: HookManager | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     registry = tools or get_tool_registry()
     event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -935,6 +1048,7 @@ async def run_agent(
         event_sink=event_queue.put_nowait,
         checkpoint_store=checkpoint_store,
         session_id=session_id,
+        hook_manager=hook_manager,
     )
 
     yield state_event(

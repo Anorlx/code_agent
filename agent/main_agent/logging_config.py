@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from agent.main_agent.config import PROJECT_ROOT
+from agent.main_agent.config import AGENT_DATA_ROOT
 
 
-DEFAULT_LOG_PATH = PROJECT_ROOT / "logs" / "agent.log"
+DEFAULT_LOG_PATH = AGENT_DATA_ROOT / "logs" / "agent.log"
 
 
 def configure_agent_logging(log_path: Path | str | None = None) -> Path:

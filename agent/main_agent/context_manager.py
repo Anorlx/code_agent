@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Callable
 
+from agent.hooks import HookAction, HookEvent, HookFailure, HookManager
 from agent.main_agent.config import (
     AUTO_COMPACT_THRESHOLD_RATIO,
     COLLAPSE_BLOCK_SPAWN_RATIO,
@@ -57,6 +59,9 @@ COMPACTABLE_TOOL_NAMES = {
 }
 
 ModelCall = Callable[..., AsyncGenerator[dict[str, Any], None]]
+
+CONTEXT_COMPACTION_EVENT = "context.before_compact"
+HOOK_FAILURE_MESSAGE = "Hook handler failed during context.before_compact."
 
 
 @dataclass
@@ -277,6 +282,11 @@ async def auto_compact(
     token_count: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     tail_user_message = messages[-1] if messages and messages[-1].get("role") == "user" else None
+    protected_hook_context = [
+        message
+        for message in messages
+        if message.get("type") == "hook_context" and message.get("protected") is True
+    ]
     if model_call is None:
         return collapse_context(messages, token_count=token_count)
 
@@ -311,6 +321,7 @@ async def auto_compact(
             "content": summary,
             "created_at": now_timestamp(),
         },
+        *protected_hook_context,
     ]
     if tail_user_message is not None:
         new_messages.append(tail_user_message)
@@ -330,11 +341,15 @@ async def manage_context(
     model_call: ModelCall | None,
     config: ContextConfig | None = None,
     current_time: float | None = None,
+    hook_manager: HookManager | None = None,
+    session_id: str = "",
+    run_id: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     config = config or ContextConfig()
     current_time = current_time or now_timestamp()
     actions: list[dict[str, Any]] = []
-    working = list(messages)
+    hook_failures: list[dict[str, str]] = []
+    working = deepcopy(messages)
     token_count = estimate_tokens(working) + estimate_tokens(system_prompt)
 
     if should_micro_compact(working, current_time=current_time, config=config):
@@ -349,7 +364,72 @@ async def manage_context(
         token_count = estimate_tokens(working) + estimate_tokens(system_prompt)
         warning = token_warning_state(token_count, config)
 
-    if warning["isAboveAutoCompactThreshold"]:
+    compact_blocked = False
+    if warning["isAboveAutoCompactThreshold"] and hook_manager is not None:
+        hook_result = await hook_manager.emit(
+            HookEvent(
+                CONTEXT_COMPACTION_EVENT,
+                session_id,
+                {
+                    "messages": deepcopy(working),
+                    "token_count": token_count,
+                    "reason": "auto_compact_threshold",
+                },
+                {"run_id": run_id},
+            )
+        )
+        hook_failures.extend(
+            _safe_hook_failure(CONTEXT_COMPACTION_EVENT, failure)
+            for failure in hook_result.failures
+        )
+
+        updated_payload = hook_result.updated_payload or {}
+        updated_messages = updated_payload.get("messages")
+        if isinstance(updated_messages, list) and all(
+            isinstance(message, dict) for message in updated_messages
+        ):
+            working = deepcopy(updated_messages)
+        else:
+            hook_failures.append(
+                _safe_hook_failure(
+                    CONTEXT_COMPACTION_EVENT,
+                    HookFailure(
+                        "context.before_compact payload",
+                        "HookPayloadError",
+                        "messages must be a list of dictionaries",
+                    ),
+                )
+            )
+
+        protected_context = [
+            {
+                "role": "system",
+                "type": "hook_context",
+                "protected": True,
+                "content": context,
+                "created_at": now_timestamp(),
+            }
+            for context in hook_result.additional_context
+            if context
+        ]
+        if working and working[-1].get("role") == "user":
+            working[-1:-1] = protected_context
+        else:
+            working.extend(protected_context)
+        token_count = estimate_tokens(working) + estimate_tokens(system_prompt)
+        warning = token_warning_state(token_count, config)
+
+        if hook_result.action is HookAction.BLOCK:
+            compact_blocked = True
+            actions.append(
+                {
+                    "level": "hook_blocked",
+                    "event": CONTEXT_COMPACTION_EVENT,
+                    "reason": "Hook policy blocked automatic compaction.",
+                }
+            )
+
+    if warning["isAboveAutoCompactThreshold"] and not compact_blocked:
         working, stats = await auto_compact(
             working,
             model_call=model_call,
@@ -360,9 +440,21 @@ async def manage_context(
         token_count = estimate_tokens(working) + estimate_tokens(system_prompt)
         warning = token_warning_state(token_count, config)
 
-    return working, {
+    report = {
         "actions": actions,
         "token_warning": warning,
         "token_count": token_count,
         "spawn_blocked": bool(warning["isAboveCollapseSpawnThreshold"]),
+    }
+    if hook_manager is not None:
+        report["hook_failures"] = hook_failures
+    return working, report
+
+
+def _safe_hook_failure(event: str, failure: HookFailure) -> dict[str, str]:
+    return {
+        "event": event,
+        "handler_name": failure.handler_name,
+        "error_type": failure.error_type,
+        "message": HOOK_FAILURE_MESSAGE,
     }

@@ -5,9 +5,9 @@ __pycache__/
 .agent_history
 .mcp.json
 .agent_data/
+.code_agent/
 .matplotlib_cache/
 logs/
-tests/
 agent_write/*
 
 memory/**/*.md

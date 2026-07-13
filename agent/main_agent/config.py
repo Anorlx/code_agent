@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_TOOL_WORKSPACE = PROJECT_ROOT / "agent_write"
-MEMORY_ROOT = PROJECT_ROOT / "memory"
-AGENT_DATA_ROOT = PROJECT_ROOT / ".agent_data"
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(os.getenv("CODE_AGENT_WORKSPACE", Path.cwd())).resolve()
+DEFAULT_TOOL_WORKSPACE = PROJECT_ROOT
+MEMORY_ROOT = PROJECT_ROOT / ".code_agent" / "memory"
+AGENT_DATA_ROOT = PROJECT_ROOT / ".code_agent"
 SESSION_DB_PATH = AGENT_DATA_ROOT / "sessions.sqlite3"
 DASHSCOPE_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_CONTEXT_CACHE_TYPE = "ephemeral"

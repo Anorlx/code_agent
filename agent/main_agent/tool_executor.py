@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from agent.hooks import HookManager
 from agent.sub_agent.tool_runner import PermissionPrompter, PermissionReviewer, run_tool_subagent
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ class StreamingToolExecutor:
         name: str | None
         parallel_safe: bool
         side_effectful: bool
+        effective_arguments: dict[str, Any] | None = None
         started_at: float | None = None
         finished_at: float | None = None
         status: ToolStatus = "queued"
@@ -57,6 +60,9 @@ class StreamingToolExecutor:
         reviewer_model_name: str,
         memory_context: str | None,
         runtime_context: dict[str, Any],
+        hook_manager: HookManager | None = None,
+        session_id: str = "",
+        run_id: str = "",
     ) -> None:
         self._user_input = user_input
         self._messages = messages
@@ -66,6 +72,9 @@ class StreamingToolExecutor:
         self._reviewer_model_name = reviewer_model_name
         self._memory_context = memory_context
         self._runtime_context = runtime_context
+        self._hook_manager = hook_manager
+        self._session_id = session_id
+        self._run_id = run_id
         self._queue: asyncio.Queue[QueryEvent] = asyncio.Queue()
         self._tracked: list[StreamingToolExecutor._TrackedTool] = []
         self.results: list[dict[str, Any]] = []
@@ -99,11 +108,18 @@ class StreamingToolExecutor:
         for tracked in self._tracked:
             message = (tracked.result_event or {}).get("message") or {}
             result = message.get("raw_result") if isinstance(message, dict) else None
+            result_arguments = message.get("arguments") if isinstance(message, dict) else None
+            if tracked.effective_arguments is not None:
+                arguments = tracked.effective_arguments
+            elif isinstance(result_arguments, dict):
+                arguments = result_arguments
+            else:
+                arguments = _tool_arguments(tracked.tool_call)
             states.append(
                 {
                     "tool_call_id": tracked.tool_call.get("id", tracked.name),
                     "name": tracked.name,
-                    "arguments": _tool_arguments(tracked.tool_call),
+                    "arguments": copy.deepcopy(arguments),
                     "status": tracked.status,
                     "parallel_safe": tracked.parallel_safe,
                     "side_effectful": tracked.side_effectful,
@@ -218,6 +234,11 @@ class StreamingToolExecutor:
                 tracked.task.cancel()
 
     def _cancelled_result_event(self, tracked: _TrackedTool, reason: str) -> QueryEvent:
+        arguments = (
+            tracked.effective_arguments
+            if tracked.effective_arguments is not None
+            else _tool_arguments(tracked.tool_call)
+        )
         result = {
             "ok": False,
             "error": reason,
@@ -229,13 +250,24 @@ class StreamingToolExecutor:
                 "role": "tool",
                 "tool_call_id": tracked.tool_call.get("id", tracked.name),
                 "name": tracked.name,
-                "arguments": tracked.tool_call.get("arguments") or {},
+                "arguments": copy.deepcopy(arguments),
                 "summary": "cancelled",
                 "content": f"ERROR: {reason}",
                 "raw_result": result,
                 "created_at": time.time(),
             },
         }
+
+    def _consume_internal_event(
+        self,
+        tracked: _TrackedTool,
+        event: QueryEvent,
+    ) -> None:
+        if event.get("type") != "_tool_effective_arguments":
+            return
+        arguments = event.get("arguments")
+        if isinstance(arguments, dict):
+            tracked.effective_arguments = copy.deepcopy(arguments)
 
     async def _consume_tool_stream(self, tracked: _TrackedTool) -> None:
         try:
@@ -249,10 +281,21 @@ class StreamingToolExecutor:
                 permission_prompter=self._permission_prompter,
                 memory_context=self._memory_context,
                 runtime_context=self._runtime_context,
+                hook_manager=self._hook_manager,
+                session_id=self._session_id,
+                run_id=self._run_id,
+                _internal_event_sink=lambda event: self._consume_internal_event(
+                    tracked,
+                    event,
+                ),
             ):
                 if event.get("type") == "tool_result":
                     tracked.result_event = event
                     continue
+                if event.get("type") == "tool_start" and isinstance(
+                    event.get("arguments"), dict
+                ):
+                    tracked.effective_arguments = copy.deepcopy(event["arguments"])
                 await self._queue.put(event)
         except asyncio.CancelledError:
             tracked.status = "completed"
