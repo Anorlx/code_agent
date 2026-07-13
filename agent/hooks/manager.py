@@ -20,6 +20,30 @@ from .types import (
 )
 
 
+def _copy_json_like(value: object) -> object:
+    """Copy a Hook payload while normalizing JSON primitive subclasses."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, list):
+        return [_copy_json_like(item) for item in value]
+    if isinstance(value, dict):
+        copied: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("hook payload keys must be strings")
+            copied[str(key)] = _copy_json_like(item)
+        return copied
+    raise TypeError("hook payload values must be JSON-like")
+
+
 @dataclass(frozen=True)
 class _Registration:
     event_name: HookEventName
@@ -87,7 +111,6 @@ class HookManager:
                     self._deliver(registration, event, current_payload),
                     timeout=registration.timeout,
                 )
-                self._validate_result(event.name, result)
             except asyncio.TimeoutError:
                 failures.append(
                     HookFailure(
@@ -141,13 +164,26 @@ class HookManager:
             copy.deepcopy,
             (current_payload, event.metadata),
         )
-        return await registration.handler(
+        result = await registration.handler(
             HookEvent(
                 event.name,
                 event.session_id,
                 copied_payload,
                 copied_metadata,
             )
+        )
+        HookManager._validate_result(event.name, result)
+        copied_payload = result.updated_payload
+        if copied_payload is not None:
+            copied_payload = await asyncio.to_thread(
+                _copy_json_like, copied_payload
+            )
+        return HookResult(
+            action=result.action,
+            reason=result.reason,
+            updated_payload=copied_payload,
+            additional_context=list(result.additional_context),
+            failures=list(result.failures),
         )
 
     @staticmethod

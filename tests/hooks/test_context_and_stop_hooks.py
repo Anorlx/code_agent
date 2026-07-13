@@ -492,6 +492,30 @@ class AgentBeforeStopHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.completed, ["run-1"])
         self.assertEqual(_route_after_termination_check(update), END)
 
+    async def test_continue_preserves_additional_context_in_terminal_state(self) -> None:
+        manager = HookManager()
+        store = RecordingCheckpointStore()
+        events: list[dict[str, object]] = []
+
+        async def continues(event: HookEvent) -> HookResult:
+            return HookResult(additional_context=["retain after completion"])
+
+        manager.register("agent.before_stop", continues)
+        state = graph_state(
+            hook_manager=manager,
+            checkpoint_store=store,
+            event_sink=events.append,
+        )
+        update = await _termination_check_node(state)
+
+        protected = update["messages"][-1]
+        self.assertEqual(protected["type"], "hook_context")
+        self.assertIs(protected["protected"], True)
+        self.assertEqual(protected["content"], "retain after completion")
+        terminal = next(event for event in events if event.get("type") == "terminal")
+        terminal_protected = terminal["state"]["messages"][-1]
+        self.assertEqual(terminal_protected, protected)
+
     async def test_failure_is_opaque_and_defaults_to_completion(self) -> None:
         manager = HookManager()
         store = RecordingCheckpointStore()

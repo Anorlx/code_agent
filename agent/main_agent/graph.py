@@ -826,6 +826,8 @@ async def _verification_node(state: AgentGraphState) -> dict[str, Any]:
 
 async def _termination_check_node(state: AgentGraphState) -> dict[str, Any]:
     _emit_state(state, "终止检查")
+    terminal_state = state
+    protected_context: list[dict[str, Any]] = []
     hook_manager = state.get("hook_manager")
     if hook_manager is not None:
         hook_result = await hook_manager.emit(
@@ -843,9 +845,17 @@ async def _termination_check_node(state: AgentGraphState) -> dict[str, Any]:
                 failure.handler_name,
                 failure.error_type,
             )
+        protected_context = _protected_hook_messages(
+            hook_result.additional_context
+        )
+        if protected_context:
+            terminal_state = dict(state)
+            terminal_state["messages"] = [
+                *state.get("messages", []),
+                *protected_context,
+            ]
         if hook_result.action is HookAction.BLOCK:
-            messages = list(state.get("messages", []))
-            messages.extend(_protected_hook_messages(hook_result.additional_context))
+            messages = list(terminal_state.get("messages", []))
             _emit(
                 state,
                 {
@@ -866,18 +876,30 @@ async def _termination_check_node(state: AgentGraphState) -> dict[str, Any]:
             await _save_checkpoint(checkpoint_state)
             return update
 
-    stop_hook = state.get("stop_hook")
-    if stop_hook and stop_hook(_visible_state(state)):
+    stop_hook = terminal_state.get("stop_hook")
+    if stop_hook and stop_hook(_visible_state(terminal_state)):
         logger.info("stop_hook prevented completion")
-        await _mark_checkpoint_terminal(state, "aborted", reason="stop_hook_prevented")
-        return _terminal_update(
-            state,
+        await _mark_checkpoint_terminal(
+            terminal_state, "aborted", reason="stop_hook_prevented"
+        )
+        update = _terminal_update(
+            terminal_state,
             "stop_hook_prevented",
             TERMINATION_MESSAGES["stop_hook_prevented"],
         )
+        if protected_context:
+            update["messages"] = terminal_state["messages"]
+        return update
     logger.info("agent completed turn=%s", state.get("turn"))
-    await _mark_checkpoint_terminal(state, "completed", reason="completed")
-    return _terminal_update(state, "completed", TERMINATION_MESSAGES["completed"])
+    await _mark_checkpoint_terminal(
+        terminal_state, "completed", reason="completed"
+    )
+    update = _terminal_update(
+        terminal_state, "completed", TERMINATION_MESSAGES["completed"]
+    )
+    if protected_context:
+        update["messages"] = terminal_state["messages"]
+    return update
 
 
 def _route_after_preprocess(state: AgentGraphState) -> Literal["api_call", "__end__"]:

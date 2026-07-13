@@ -128,6 +128,54 @@ class HookManagerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.action, HookAction.CONTINUE)
 
+    async def test_modified_payload_is_independent_from_handler_owned_values(self) -> None:
+        manager = HookManager()
+        handler_payload = {"nested": {"values": [1]}}
+
+        async def modify(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload=handler_payload,
+            )
+
+        manager.register("prompt.before", modify)
+        result = await manager.emit(HookEvent("prompt.before", "s1", {}))
+        handler_payload["nested"]["values"].append(2)
+
+        self.assertEqual(result.updated_payload, {"nested": {"values": [1]}})
+
+    async def test_noncopyable_modified_payload_is_isolated(self) -> None:
+        manager = HookManager()
+        calls: list[str] = []
+
+        class NonCopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("private result copy failure")
+
+        async def invalid_modify(event: HookEvent) -> HookResult:
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={"value": NonCopyable()},
+            )
+
+        async def later(event: HookEvent) -> HookResult:
+            calls.append("continued")
+            self.assertEqual(event.payload, {"value": "original"})
+            return HookResult()
+
+        manager.register("context.before_compact", invalid_modify, name="invalid")
+        manager.register("context.before_compact", later)
+
+        result = await manager.emit(
+            HookEvent("context.before_compact", "s1", {"value": "original"})
+        )
+
+        self.assertEqual(calls, ["continued"])
+        self.assertEqual(result.updated_payload, {"value": "original"})
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(result.failures[0].handler_name, "invalid")
+        self.assertEqual(result.failures[0].error_type, "TypeError")
+
     async def test_block_requires_reason_and_short_circuits(self) -> None:
         manager = HookManager()
         calls: list[str] = []
