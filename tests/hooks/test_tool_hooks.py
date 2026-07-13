@@ -1,8 +1,11 @@
+import asyncio
 import copy
 import json
 import unittest
+from unittest.mock import patch
 
 from agent.hooks import HookAction, HookEvent, HookManager, HookResult
+from agent.main_agent.graph import _api_call_node
 from agent.main_agent.tool_executor import StreamingToolExecutor
 from agent.sub_agent.tool_runner import run_tool_subagent
 
@@ -55,6 +58,49 @@ def result_events(events):
 
 
 class ToolHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_before_invalid_modified_arguments_are_safely_blocked(self):
+        invalid_payloads = [
+            {
+                "tool_name": "number",
+                "arguments": ["not", "a", "mapping"],
+                "tool_call_id": "call-1",
+            },
+            {"arguments": {"n": 2}, "tool_call_id": "call-1"},
+        ]
+
+        for invalid_payload in invalid_payloads:
+            with self.subTest(payload=invalid_payload):
+                calls = []
+                manager = HookManager()
+
+                async def invalid_modify(event, payload=invalid_payload):
+                    return HookResult(
+                        action=HookAction.MODIFY,
+                        updated_payload=payload,
+                    )
+
+                async def run(arguments):
+                    calls.append(arguments)
+                    return {"ok": True, "content": "must not run"}
+
+                manager.register("tool.before", invalid_modify)
+                events = await collect_tool_events(
+                    [{"id": "call-1", "name": "number", "arguments": {"n": 1}}],
+                    number_tool(run),
+                    hook_manager=manager,
+                )
+
+                message = result_events(events)[0]["message"]
+                self.assertEqual(calls, [])
+                self.assertEqual(
+                    message["raw_result"],
+                    {
+                        "ok": False,
+                        "error": "Tool blocked by lifecycle hook policy.",
+                        "hook_blocked": True,
+                    },
+                )
+
     async def test_permission_review_precedes_before_modify_and_rebuilds_message(self):
         order = []
         calls = []
@@ -162,6 +208,7 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
                 action=HookAction.MODIFY,
                 updated_payload={
                     **event.payload,
+                    "arguments": {"n": 22},
                     "result": {"ok": True, "content": "changed"},
                 },
             )
@@ -177,6 +224,8 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
         )
 
         message = result_events(events)[0]["message"]
+        self.assertEqual(message["arguments"], {"n": 22})
+        self.assertEqual(message["summary"], "n=22")
         self.assertEqual(message["raw_result"], {"ok": True, "content": "changed"})
         self.assertEqual(message["content"], "changed")
 
@@ -190,6 +239,7 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
                 action=HookAction.MODIFY,
                 updated_payload={
                     **event.payload,
+                    "arguments": {"n": 33},
                     "result": {"ok": False, "error": "replacement"},
                 },
             )
@@ -206,8 +256,61 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
 
         message = result_events(events)[0]["message"]
         self.assertEqual(seen, [{"ok": False, "error": "original"}])
+        self.assertEqual(message["arguments"], {"n": 33})
+        self.assertEqual(message["summary"], "n=33")
         self.assertEqual(message["raw_result"]["error"], "replacement")
         self.assertEqual(message["content"], "ERROR: replacement")
+
+    async def test_after_and_error_handler_failures_are_opaque_and_continue(self):
+        cases = [
+            (
+                "tool.after",
+                {"ok": True, "content": "success-result-secret-271828"},
+                "success-result-secret-271828",
+            ),
+            (
+                "tool.error",
+                {"ok": False, "error": "failure-result-secret-314159"},
+                "ERROR: failure-result-secret-314159",
+            ),
+        ]
+
+        for event_name, runner_result, expected_content in cases:
+            with self.subTest(event_name=event_name):
+                manager = HookManager()
+
+                async def raises(event):
+                    raise RuntimeError(
+                        f"argument-secret={event.payload['arguments']} "
+                        f"result-secret={event.payload['result']}"
+                    )
+
+                async def run(arguments, result=runner_result):
+                    return result
+
+                manager.register(event_name, raises, name=f"unsafe {event_name}")
+                events = await collect_tool_events(
+                    [{"id": "call-secret", "name": "number", "arguments": {"n": 987654}}],
+                    number_tool(run),
+                    hook_manager=manager,
+                )
+
+                error = next(
+                    event for event in events if event.get("type") == "hook_error"
+                )
+                self.assertEqual(
+                    set(error),
+                    {"type", "event_name", "handler_name", "error_type", "message"},
+                )
+                self.assertEqual(error["event_name"], event_name)
+                self.assertEqual(error["error_type"], "RuntimeError")
+                rendered_error = json.dumps(error)
+                self.assertNotIn("987654", rendered_error)
+                self.assertNotIn("success-result-secret-271828", rendered_error)
+                self.assertNotIn("failure-result-secret-314159", rendered_error)
+                message = result_events(events)[0]["message"]
+                self.assertEqual(message["raw_result"], runner_result)
+                self.assertEqual(message["content"], expected_content)
 
     async def test_runner_exception_becomes_failure_and_runs_error_hook(self):
         manager = HookManager()
@@ -372,6 +475,100 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([message["arguments"] for message in messages], [{"n": 2}, {"n": 2}])
         self.assertEqual(calls, original)
 
+    async def test_parallel_safe_tools_overlap_and_results_stay_in_call_order(self):
+        active = 0
+        maximum_active = 0
+        both_started = asyncio.Event()
+
+        async def run(arguments):
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            if active == 2:
+                both_started.set()
+            try:
+                await asyncio.wait_for(both_started.wait(), timeout=1)
+                return {"ok": True, "content": str(arguments["n"])}
+            finally:
+                active -= 1
+
+        events = await collect_tool_events(
+            [
+                {"id": "first", "name": "number", "arguments": {"n": 1}},
+                {"id": "second", "name": "number", "arguments": {"n": 2}},
+            ],
+            number_tool(run),
+        )
+
+        messages = [event["message"] for event in result_events(events)]
+        self.assertEqual(maximum_active, 2)
+        self.assertEqual(
+            [message["tool_call_id"] for message in messages],
+            ["first", "second"],
+        )
+        self.assertEqual([message["content"] for message in messages], ["1", "2"])
+
+    async def test_failed_bash_cancels_executing_parallel_sibling_safely(self):
+        sibling_started = asyncio.Event()
+        sibling_cancelled = asyncio.Event()
+
+        async def bash_run(arguments):
+            await asyncio.wait_for(sibling_started.wait(), timeout=1)
+            return {"ok": False, "error": "bash failed"}
+
+        async def sibling_run(arguments):
+            sibling_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                sibling_cancelled.set()
+                raise
+
+        tools = {
+            "bash": {
+                "run": bash_run,
+                "permission": "allow",
+                "parallel_safe": True,
+                "spec": {"parameters": {"type": "object", "properties": {}}},
+            },
+            "worker": {
+                "run": sibling_run,
+                "permission": "allow",
+                "parallel_safe": True,
+                "spec": {"parameters": {"type": "object", "properties": {}}},
+            },
+        }
+        executor = StreamingToolExecutor(
+            user_input="run",
+            messages=[],
+            tools=tools,
+            permission_reviewer=None,
+            permission_prompter=None,
+            reviewer_model_name="reviewer",
+            memory_context=None,
+            runtime_context={},
+        )
+        executor.submit({"id": "bash-call", "name": "bash", "arguments": {}})
+        executor.submit({"id": "worker-call", "name": "worker", "arguments": {}})
+
+        await asyncio.wait_for(executor.finish(), timeout=2)
+
+        self.assertTrue(sibling_cancelled.is_set())
+        self.assertEqual(
+            [message["tool_call_id"] for message in executor.results],
+            ["bash-call", "worker-call"],
+        )
+        cancelled = executor.results[1]
+        self.assertEqual(
+            cancelled["raw_result"],
+            {
+                "ok": False,
+                "error": "Cancelled because a sibling Bash/run_command tool failed.",
+                "cancelled": True,
+            },
+        )
+        self.assertEqual(cancelled["summary"], "cancelled")
+
     async def test_streaming_executor_forwards_runtime_hook_identity_without_checkpointing_it(self):
         manager = HookManager()
         seen = []
@@ -406,6 +603,51 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("hook_manager", checkpoint)
         self.assertNotIn("session_id", checkpoint)
         self.assertNotIn("run_id", checkpoint)
+
+    async def test_graph_forwards_identical_hook_and_runtime_identity_to_executor(self):
+        manager = HookManager()
+        captured = {}
+
+        class CapturingExecutor:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                self.results = []
+
+            async def drain_ready(self):
+                return []
+
+            async def finish(self):
+                return []
+
+            def checkpoint_tool_states(self):
+                return []
+
+        async def model_call(**request):
+            if False:
+                yield {}
+
+        state = {
+            "user_input": "run",
+            "messages": [],
+            "tools": {},
+            "selected_tools": [],
+            "model_call": model_call,
+            "main_model_name": "main",
+            "subagent_model_name": "subagent",
+            "reviewer_model_name": "reviewer",
+            "blocking_token_limit": 10_000,
+            "hook_manager": manager,
+            "session_id": "graph-session",
+            "run_id": "graph-run",
+            "turn": 1,
+        }
+
+        with patch("agent.main_agent.graph.StreamingToolExecutor", CapturingExecutor):
+            await _api_call_node(state)
+
+        self.assertIs(captured["hook_manager"], manager)
+        self.assertEqual(captured["session_id"], "graph-session")
+        self.assertEqual(captured["run_id"], "graph-run")
 
 
 if __name__ == "__main__":
