@@ -135,6 +135,112 @@ _SCHEMA_VALIDATION_KEYS = {
     "type",
     "uniqueItems",
 }
+_SCHEMA_TYPES = {"array", "boolean", "integer", "null", "number", "object", "string"}
+_NONNEGATIVE_INTEGER_CONSTRAINTS = {
+    "maxItems",
+    "maxLength",
+    "maxProperties",
+    "minItems",
+    "minLength",
+    "minProperties",
+}
+_NUMBER_CONSTRAINTS = {
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "maximum",
+    "minimum",
+}
+
+
+def _is_non_boolean_integer(value: Any, *, nonnegative: bool = False) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and (not nonnegative or value >= 0)
+    )
+
+
+def _is_non_boolean_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_schema_shape(schema: Any, *, path: str) -> str | None:
+    if isinstance(schema, bool):
+        return None
+    if not isinstance(schema, dict):
+        return f"{path} has an invalid schema."
+
+    unsupported = set(schema) - _SCHEMA_ANNOTATION_KEYS - _SCHEMA_VALIDATION_KEYS
+    if unsupported:
+        return f"{path} uses an unsupported schema constraint."
+
+    schema_type = schema.get("type")
+    if "type" in schema:
+        allowed_types = schema_type if isinstance(schema_type, list) else [schema_type]
+        if (
+            not allowed_types
+            or not all(isinstance(item, str) for item in allowed_types)
+            or any(item not in _SCHEMA_TYPES for item in allowed_types)
+        ):
+            return f"{path} has an invalid type constraint."
+
+    if "enum" in schema and not isinstance(schema["enum"], list):
+        return f"{path} has an invalid enum constraint."
+    required = schema.get("required")
+    if "required" in schema and (
+        not isinstance(required, list)
+        or not all(isinstance(key, str) for key in required)
+    ):
+        return f"{path} has an invalid required constraint."
+
+    properties = schema.get("properties")
+    if "properties" in schema:
+        if not isinstance(properties, dict) or not all(
+            isinstance(key, str) for key in properties
+        ):
+            return f"{path} has an invalid properties constraint."
+        for key, child_schema in properties.items():
+            error = _validate_schema_shape(child_schema, path=f"{path}.{key}")
+            if error is not None:
+                return error
+
+    for keyword in ("items", "additionalProperties"):
+        if keyword in schema:
+            error = _validate_schema_shape(
+                schema[keyword],
+                path=f"{path}.{keyword}",
+            )
+            if error is not None:
+                return error
+
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        if keyword not in schema:
+            continue
+        branches = schema[keyword]
+        if not isinstance(branches, list):
+            return f"{path} has an invalid {keyword} schema."
+        for index, branch in enumerate(branches):
+            error = _validate_schema_shape(
+                branch,
+                path=f"{path}.{keyword}[{index}]",
+            )
+            if error is not None:
+                return error
+
+    for keyword in _NONNEGATIVE_INTEGER_CONSTRAINTS:
+        if keyword in schema and not _is_non_boolean_integer(
+            schema[keyword],
+            nonnegative=True,
+        ):
+            return f"{path} has an invalid {keyword} constraint."
+    for keyword in _NUMBER_CONSTRAINTS:
+        if keyword in schema and not _is_non_boolean_number(schema[keyword]):
+            return f"{path} has an invalid {keyword} constraint."
+    if "uniqueItems" in schema and not isinstance(schema["uniqueItems"], bool):
+        return f"{path} has an invalid uniqueItems constraint."
+    if "pattern" in schema and not isinstance(schema["pattern"], str):
+        return f"{path} has an invalid pattern constraint."
+    return None
 
 
 def _validate_schema_value(
@@ -150,18 +256,14 @@ def _validate_schema_value(
     if not isinstance(schema, dict):
         return f"{path} has an invalid schema."
 
-    unsupported = set(schema) - _SCHEMA_ANNOTATION_KEYS - _SCHEMA_VALIDATION_KEYS
-    if unsupported:
-        return f"{path} uses an unsupported schema constraint."
+    shape_error = _validate_schema_shape(schema, path=path)
+    if shape_error is not None:
+        return shape_error
 
     for keyword in ("allOf", "anyOf", "oneOf"):
         if keyword not in schema:
             continue
         branches = schema[keyword]
-        if not isinstance(branches, list) or not all(
-            isinstance(branch, dict) for branch in branches
-        ):
-            return f"{path} has an invalid {keyword} schema."
         matches = [
             _validate_schema_value(value, branch, path=path) is None
             for branch in branches
@@ -176,14 +278,12 @@ def _validate_schema_value(
     schema_type = schema.get("type")
     if schema_type is not None:
         allowed_types = schema_type if isinstance(schema_type, list) else [schema_type]
-        if not allowed_types or not all(isinstance(item, str) for item in allowed_types):
-            return f"{path} has an invalid type constraint."
         if not any(_schema_type_matches(value, item) for item in allowed_types):
             return f"{path} has the wrong type."
 
     enum = schema.get("enum")
     if enum is not None:
-        if not isinstance(enum, list) or value not in enum:
+        if value not in enum:
             return f"{path} is not an allowed enum value."
     if "const" in schema and value != schema["const"]:
         return f"{path} does not match const."
@@ -191,15 +291,6 @@ def _validate_schema_value(
     if isinstance(value, dict):
         required = schema.get("required", [])
         properties = schema.get("properties", {})
-        if not isinstance(required, list) or not all(
-            isinstance(key, str) for key in required
-        ):
-            return f"{path} has an invalid required constraint."
-        if not isinstance(properties, dict) or not all(
-            isinstance(key, str) and isinstance(field_schema, dict)
-            for key, field_schema in properties.items()
-        ):
-            return f"{path} has an invalid properties constraint."
         for key in required:
             if key not in value:
                 return f"{path}.{key} is required."
@@ -216,7 +307,7 @@ def _validate_schema_value(
             additional = schema.get("additionalProperties", True)
             if additional is False:
                 return f"{path} contains an additional property."
-            if isinstance(additional, dict):
+            if isinstance(additional, (bool, dict)):
                 error = _validate_schema_value(
                     field_value,
                     additional,
@@ -224,22 +315,18 @@ def _validate_schema_value(
                 )
                 if error is not None:
                     return error
-            elif additional is not True:
-                return f"{path} has an invalid additionalProperties constraint."
         for keyword, comparator in (
             ("minProperties", lambda size, limit: size >= limit),
             ("maxProperties", lambda size, limit: size <= limit),
         ):
             if keyword in schema:
                 limit = schema[keyword]
-                if not isinstance(limit, int) or not comparator(len(value), limit):
+                if not comparator(len(value), limit):
                     return f"{path} does not satisfy {keyword}."
 
     if isinstance(value, list):
         items = schema.get("items")
         if items is not None:
-            if not isinstance(items, dict):
-                return f"{path} has an invalid items constraint."
             for index, item in enumerate(value):
                 error = _validate_schema_value(item, items, path=f"{path}[{index}]")
                 if error is not None:
@@ -250,14 +337,12 @@ def _validate_schema_value(
         ):
             if keyword in schema:
                 limit = schema[keyword]
-                if not isinstance(limit, int) or not comparator(len(value), limit):
+                if not comparator(len(value), limit):
                     return f"{path} does not satisfy {keyword}."
         if schema.get("uniqueItems") is True:
             for index, item in enumerate(value):
                 if item in value[:index]:
                     return f"{path} does not satisfy uniqueItems."
-        elif "uniqueItems" in schema and schema["uniqueItems"] is not False:
-            return f"{path} has an invalid uniqueItems constraint."
 
     if isinstance(value, str):
         for keyword, comparator in (
@@ -266,12 +351,10 @@ def _validate_schema_value(
         ):
             if keyword in schema:
                 limit = schema[keyword]
-                if not isinstance(limit, int) or not comparator(len(value), limit):
+                if not comparator(len(value), limit):
                     return f"{path} does not satisfy {keyword}."
         if "pattern" in schema:
             pattern = schema["pattern"]
-            if not isinstance(pattern, str):
-                return f"{path} has an invalid pattern constraint."
             try:
                 matches_pattern = re.search(pattern, value) is not None
             except re.error:
@@ -288,11 +371,7 @@ def _validate_schema_value(
         ):
             if keyword in schema:
                 limit = schema[keyword]
-                if (
-                    not isinstance(limit, (int, float))
-                    or isinstance(limit, bool)
-                    or not comparator(value, limit)
-                ):
+                if not comparator(value, limit):
                     return f"{path} does not satisfy {keyword}."
 
     return None

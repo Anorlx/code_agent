@@ -59,6 +59,192 @@ def result_events(events):
 
 
 class ToolHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_boolean_numeric_schema_constraints_fail_closed(self):
+        cases = [
+            ({"type": "array", "minItems": True}, [1, 2]),
+            ({"type": "array", "maxItems": False}, []),
+            ({"type": "string", "minLength": True}, "ab"),
+            ({"type": "string", "maxLength": False}, ""),
+            (
+                {
+                    "type": "object",
+                    "minProperties": True,
+                    "properties": {},
+                },
+                {"a": 1, "b": 2},
+            ),
+            (
+                {
+                    "type": "object",
+                    "maxProperties": False,
+                    "properties": {},
+                },
+                {},
+            ),
+        ]
+
+        for value_schema, value in cases:
+            with self.subTest(schema=value_schema):
+                calls = []
+
+                async def run(arguments):
+                    calls.append(arguments)
+                    return {"ok": True, "content": "must not run"}
+
+                events = await collect_tool_events(
+                    [
+                        {
+                            "id": "call-1",
+                            "name": "schema_tool",
+                            "arguments": {"value": value},
+                        }
+                    ],
+                    {
+                        "schema_tool": {
+                            "run": run,
+                            "permission": "allow",
+                            "parallel_safe": True,
+                            "spec": {
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"value": value_schema},
+                                }
+                            },
+                        }
+                    },
+                )
+
+                self.assertEqual(calls, [])
+                message = result_events(events)[0]["message"]
+                self.assertFalse(message["raw_result"]["ok"])
+                self.assertEqual(message["raw_result"]["review"]["stage"], "validateInput")
+                self.assertNotIn(str(value_schema), message["raw_result"]["error"])
+
+    async def test_nested_boolean_schemas_are_valid_schema_nodes(self):
+        accepted_cases = [
+            (
+                {"type": "object", "properties": {"value": True}},
+                {"value": {"nested": 1}},
+            ),
+            (
+                {
+                    "type": "object",
+                    "properties": {"value": {"type": "array", "items": True}},
+                },
+                {"value": [1, "two", None]},
+            ),
+            ({"allOf": [True]}, {"anything": 1}),
+            ({"anyOf": [False, True]}, {"anything": 1}),
+            ({"oneOf": [False, True]}, {"anything": 1}),
+        ]
+        rejected_cases = [
+            ({"type": "object", "properties": {"value": False}}, {"value": 1}),
+            (
+                {
+                    "type": "object",
+                    "properties": {"value": {"type": "array", "items": False}},
+                },
+                {"value": [1]},
+            ),
+            ({"allOf": [False]}, {"anything": 1}),
+        ]
+
+        for parameters, arguments in accepted_cases:
+            with self.subTest(accepted=parameters):
+                calls = []
+
+                async def run(tool_arguments):
+                    calls.append(tool_arguments)
+                    return {"ok": True, "content": "accepted"}
+
+                events = await collect_tool_events(
+                    [{"id": "call-1", "name": "schema_tool", "arguments": arguments}],
+                    {
+                        "schema_tool": {
+                            "run": run,
+                            "permission": "allow",
+                            "parallel_safe": True,
+                            "spec": {"parameters": parameters},
+                        }
+                    },
+                )
+
+                self.assertEqual(calls, [arguments])
+                self.assertEqual(result_events(events)[0]["message"]["content"], "accepted")
+
+        for parameters, arguments in rejected_cases:
+            with self.subTest(rejected=parameters):
+                calls = []
+
+                async def run(tool_arguments):
+                    calls.append(tool_arguments)
+                    return {"ok": True}
+
+                events = await collect_tool_events(
+                    [{"id": "call-2", "name": "schema_tool", "arguments": arguments}],
+                    {
+                        "schema_tool": {
+                            "run": run,
+                            "permission": "allow",
+                            "parallel_safe": True,
+                            "spec": {"parameters": parameters},
+                        }
+                    },
+                )
+
+                self.assertEqual(calls, [])
+                self.assertFalse(result_events(events)[0]["message"]["raw_result"]["ok"])
+
+    async def test_explicitly_malformed_schema_keyword_shapes_fail_closed(self):
+        malformed_schemas = [
+            {"type": None},
+            {"type": "object", "properties": None},
+            {"type": "object", "required": None},
+        ]
+
+        for parameters in malformed_schemas:
+            with self.subTest(parameters=parameters):
+                calls = []
+
+                async def run(arguments):
+                    calls.append(arguments)
+                    return {"ok": True}
+
+                events = await collect_tool_events(
+                    [{"id": "call-1", "name": "schema_tool", "arguments": {}}],
+                    {
+                        "schema_tool": {
+                            "run": run,
+                            "permission": "allow",
+                            "parallel_safe": True,
+                            "spec": {"parameters": parameters},
+                        }
+                    },
+                )
+
+                self.assertEqual(calls, [])
+                self.assertFalse(result_events(events)[0]["message"]["raw_result"]["ok"])
+
+        accepted_calls = []
+
+        async def accepted_run(arguments):
+            accepted_calls.append(arguments)
+            return {"ok": True, "content": "accepted"}
+
+        events = await collect_tool_events(
+            [{"id": "call-2", "name": "schema_tool", "arguments": {"free": 1}}],
+            {
+                "schema_tool": {
+                    "run": accepted_run,
+                    "permission": "allow",
+                    "parallel_safe": True,
+                    "spec": {"parameters": {}},
+                }
+            },
+        )
+        self.assertEqual(accepted_calls, [{"free": 1}])
+        self.assertEqual(result_events(events)[0]["message"]["content"], "accepted")
+
     async def test_boolean_and_malformed_parameter_schemas_fail_closed(self):
         rejected_schemas = [False, [], ""]
 
