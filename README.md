@@ -157,7 +157,7 @@ flowchart TB
 
 ## 🪝 lifecycle hooks
 
-Lifecycle Hooks 是 runtime 的 typed async 扩展点：嵌入方可以在稳定的生命周期边界观察事件、修改受支持的 payload，或者显式阻止某次操作。它不替代 permission review；permission review 判断一次工具调用是否被授权，Hook 则在已经定义好的运行阶段扩展行为。对工具而言，permission review 始终先执行并保持权威。
+Lifecycle Hooks 是 runtime 的 typed async 扩展点：嵌入方可以在稳定的生命周期边界观察事件、修改受支持的 payload，或者显式阻止某次操作。它不替代 permission review；permission review 判断原始工具调用是否被授权，Hook 则在已经定义好的运行阶段扩展行为。具体的参数授权边界见下文。
 
 ### Supported events
 
@@ -178,46 +178,50 @@ Lifecycle Hooks 是 runtime 的 typed async 扩展点：嵌入方可以在稳定
 
 ```python
 import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
 
 from agent.hooks import HookAction, HookEvent, HookManager, HookResult
-from agent.main_agent.model_client import dashscope_stream_chat
 from agent.main_agent.query_engine import QueryEngine
 
 
+async def model_call(**request: Any) -> AsyncIterator[dict[str, Any]]:
+    system_prompt = str(request.get("system_prompt") or "")
+    if "Agent Mode Router" in system_prompt:
+        yield {
+            "type": "assistant_delta",
+            "content": '{"mode":"chat","confidence":1,"reason":"example"}',
+        }
+    else:
+        yield {"type": "assistant_delta", "content": "Hooked prompt accepted."}
+
+
 async def add_project_policy(event: HookEvent) -> HookResult:
-    memory_context = event.payload.get("memory_context")
-    if not isinstance(memory_context, str):
-        memory_context = ""
     return HookResult(
         action=HookAction.MODIFY,
         updated_payload={
             **event.payload,
-            "memory_context": "\n".join(
-                part for part in (memory_context, "Follow the repository policy.") if part
+            "user_input": (
+                f"{event.payload['user_input']}\nFollow the repository policy."
             ),
         },
     )
 
 
 async def main() -> None:
-    hook_manager = HookManager(default_timeout=5.0)
+    hook_manager = HookManager()
     unregister = hook_manager.register(
         "prompt.before",
         add_project_policy,
         priority=50,
-        name="project policy",
-        timeout=2.0,
     )
-    engine = QueryEngine(
-        model_call=dashscope_stream_chat,
-        hook_manager=hook_manager,
-        session_id="embedding-example",
-    )
+    engine = QueryEngine(model_call=model_call, hook_manager=hook_manager)
     try:
-        async for runtime_event in engine.submit_message("Summarize this repository"):
-            # Only log safe structural fields, never the raw Hook payload.
-            if runtime_event.get("type", "").startswith("hook_"):
-                print(runtime_event.get("type"), runtime_event.get("event_name"))
+        async for event in engine.submit_message("Summarize this repository"):
+            if event["type"] == "assistant_delta":
+                print(event["content"], end="")
+            elif event["type"] == "terminal":
+                print(f"\nterminal: {event['reason']}")
     finally:
         unregister()
 
@@ -229,10 +233,10 @@ asyncio.run(main())
 
 - 较小的 numeric priority 先运行；相同 priority 严格保持注册顺序。`modify` 的完整新 payload 会传给后续 handler，合法的 `block` 会立即停止当前 dispatch。
 - 每个 handler 都收到独立的 deep copy。`payload`、`metadata` 和返回的 `updated_payload` 必须是可 `deepcopy` 的 JSON-like 数据（dictionary、list、string、number、boolean 或 `None`），不要直接修改收到的 event。
-- 不支持的 action、缺失或不合法的 payload、timeout 和 exception 都会被隔离为 opaque failure；除合法 `block`/`retry` 外，后续 handler 和 runtime 继续运行。日志只记录 event/handler/error type 等安全结构字段，不记录 prompt、参数、结果、reason、异常文本、凭据或其他 raw sensitive data。
+- 不支持的 action、缺失或不合法的 payload、timeout 和 exception 都会被隔离；除合法 `block`/`retry` 外，后续 handler 和 runtime 继续运行。Runtime 发出的 `hook_error` / `hook_blocked` 与日志诊断是 opaque 的，只包含 event/handler/error type 等安全结构字段。直接在可信进程内调用 `HookManager.emit()` 时，返回的 `HookResult.failures` 会保留 `HookFailure.message` 供 programmatic inspection；不要把这个 raw message 或其他 prompt、参数、结果、reason、凭据及 sensitive data 写入日志。
 - `tool.error` 最多触发一次 Hook retry；第二次 retry 请求被拒绝，从而不会形成循环。
 
-工具路径固定为 `permission review → tool.before → execution → tool.after/tool.error`。Python Hook 是 trusted extension，但 `tool.before` 不能改变已批准的工具名，修改后的参数和 retry 参数仍要通过本地 schema guard；结果 payload 也会被事件级校验。当前没有 external command Hook loader，也不允许 JSON Schema 通过 HTTP 或 file reference 拉取外部内容。
+工具路径固定为 `permission review（原始 tool call）→ tool.before → execution → tool.after/tool.error`。Python Hook 是 trusted extension；`tool.before` 修改和 `tool.error` retry 必须保持同一个工具名并通过本地 schema guard，但修改后的参数与 retry 不会再次经过 permission review。需要 parameter-level authorization 的应用应在 `tool.before` handler 内实施该策略，或者避免参数修改与 retry。结果 payload 也会被事件级校验。当前没有 external command Hook loader，也不允许 JSON Schema 通过 HTTP 或 file reference 拉取外部内容。
 
 `context.before_compact` 的 `block` 只跳过当前一次 automatic compaction，下一次达到阈值时仍可再次发出事件。`agent.before_stop` 的 `block` 会让 graph 继续下一轮，但仍受 `max_turns` 等现有硬边界约束；legacy `stop_hook` 继续受支持，并在 structured before-stop handler 之后保持原有行为。
 
@@ -240,11 +244,11 @@ CLI 为进程创建并复用一个 manager：session 选择/创建与 checkpoint
 
 `model.before` / `model.after` 有意 deferred：当前模型路径包含 partial streaming output 和 transient retry，尚未稳定定义 handler 应按每次 attempt 还是每个 logical request 运行，以及 partial output 何时算作 `after`。External command Hooks 同样未提供。
 
-完整约束见 [`AGENTS.md`](AGENTS.md)，public implementation 位于 [`agent/hooks/`](agent/hooks/)。使用 Python 3.10+ 运行当前 102+ tests 和 compile check：
+完整约束见 [`AGENTS.md`](AGENTS.md)，public implementation 位于 [`agent/hooks/`](agent/hooks/)。完成 editable install 后，先激活所选的 Python 3.10+ environment，再运行 complete suite 和 compile check：
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
-.venv/bin/python -m compileall -q agent tests
+python -m unittest discover -s tests -p 'test_*.py' -v
+python -m compileall -q agent tests
 ```
 
 <a id="tool-fabric"></a>
