@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from agent.hooks import HookManager
 from agent.sub_agent.tool_runner import PermissionPrompter, PermissionReviewer, run_tool_subagent
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,9 @@ class StreamingToolExecutor:
         reviewer_model_name: str,
         memory_context: str | None,
         runtime_context: dict[str, Any],
+        hook_manager: HookManager | None = None,
+        session_id: str = "",
+        run_id: str = "",
     ) -> None:
         self._user_input = user_input
         self._messages = messages
@@ -66,6 +70,9 @@ class StreamingToolExecutor:
         self._reviewer_model_name = reviewer_model_name
         self._memory_context = memory_context
         self._runtime_context = runtime_context
+        self._hook_manager = hook_manager
+        self._session_id = session_id
+        self._run_id = run_id
         self._queue: asyncio.Queue[QueryEvent] = asyncio.Queue()
         self._tracked: list[StreamingToolExecutor._TrackedTool] = []
         self.results: list[dict[str, Any]] = []
@@ -249,6 +256,9 @@ class StreamingToolExecutor:
                 permission_prompter=self._permission_prompter,
                 memory_context=self._memory_context,
                 runtime_context=self._runtime_context,
+                hook_manager=self._hook_manager,
+                session_id=self._session_id,
+                run_id=self._run_id,
             ):
                 if event.get("type") == "tool_result":
                     tracked.result_event = event

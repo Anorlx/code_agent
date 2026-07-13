@@ -492,6 +492,9 @@ async def _api_call_node(state: AgentGraphState) -> dict[str, Any]:
         permission_prompter=state.get("permission_prompter"),
         reviewer_model_name=state["reviewer_model_name"],
         memory_context=state.get("memory_context"),
+        hook_manager=state.get("hook_manager"),
+        session_id=state.get("session_id") or "",
+        run_id=state.get("run_id") or "",
         runtime_context={
             "user_input": state["user_input"],
             "messages": state["messages"],
