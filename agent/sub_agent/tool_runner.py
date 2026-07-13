@@ -9,12 +9,14 @@ import warnings
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from jsonschema.validators import validator_for
+from referencing import Registry
 
 from agent.hooks import HookAction, HookEvent, HookManager, HookResult
 from agent.sub_agent.context_builder import build_task_context, task_context_report
 from agent.sub_agent.permission_review import review_tool_call
 
 logger = logging.getLogger(__name__)
+_NO_RETRIEVAL_SCHEMA_REGISTRY = Registry()
 
 PermissionReviewer = Callable[
     [str, list[dict[str, Any]], dict[str, Any], dict[str, Any], str],
@@ -121,7 +123,10 @@ def _validate_tool_input(
                 warnings.simplefilter("always")
                 ValidatorClass = validator_for(parameters)
                 ValidatorClass.check_schema(parameters)
-                ValidatorClass(parameters).validate(arguments)
+                ValidatorClass(
+                    parameters,
+                    registry=_NO_RETRIEVAL_SCHEMA_REGISTRY,
+                ).validate(arguments)
             schema_error_type = "UnknownSchemaDialect" if schema_warnings else None
         except Exception as error:
             schema_error_type = type(error).__name__

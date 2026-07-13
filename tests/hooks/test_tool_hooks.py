@@ -61,6 +61,86 @@ def result_events(events):
 
 
 class ToolHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_external_refs_never_invoke_network_or_file_retrieval(self):
+        external_refs = [
+            "https://schemas.invalid/private-external-schema",
+            "file:///private/secret-schema.json",
+        ]
+
+        for external_ref in external_refs:
+            with self.subTest(external_ref=external_ref):
+                calls = []
+
+                async def run(arguments):
+                    calls.append(arguments)
+                    return {"ok": True, "content": "must not run"}
+
+                with patch("urllib.request.urlopen") as retrieve:
+                    retrieve.side_effect = AssertionError("external retrieval attempted")
+                    events = await collect_tool_events(
+                        [
+                            {
+                                "id": "call-1",
+                                "name": "schema_tool",
+                                "arguments": {"secret": 1},
+                            }
+                        ],
+                        {
+                            "schema_tool": {
+                                "run": run,
+                                "permission": "allow",
+                                "parallel_safe": True,
+                                "spec": {"parameters": {"$ref": external_ref}},
+                            }
+                        },
+                    )
+
+                retrieve.assert_not_called()
+                self.assertEqual(calls, [])
+                message = result_events(events)[0]["message"]
+                self.assertFalse(message["raw_result"]["ok"])
+                self.assertNotIn(external_ref, json.dumps(events))
+
+    async def test_local_fragment_refs_resolve_without_external_registry(self):
+        calls = []
+        parameters = {
+            "$defs": {
+                "positive": {
+                    "type": "integer",
+                    "minimum": 1,
+                }
+            },
+            "type": "object",
+            "properties": {"n": {"$ref": "#/$defs/positive"}},
+            "required": ["n"],
+        }
+
+        async def run(arguments):
+            calls.append(arguments)
+            return {"ok": True, "content": "accepted"}
+
+        tools = {
+            "schema_tool": {
+                "run": run,
+                "permission": "allow",
+                "parallel_safe": True,
+                "spec": {"parameters": parameters},
+            }
+        }
+        valid = {"n": 2}
+        valid_events = await collect_tool_events(
+            [{"id": "valid", "name": "schema_tool", "arguments": valid}],
+            tools,
+        )
+        invalid_events = await collect_tool_events(
+            [{"id": "invalid", "name": "schema_tool", "arguments": {"n": 0}}],
+            tools,
+        )
+
+        self.assertEqual(calls, [valid])
+        self.assertEqual(result_events(valid_events)[0]["message"]["content"], "accepted")
+        self.assertFalse(result_events(invalid_events)[0]["message"]["raw_result"]["ok"])
+
     async def test_unresolvable_remote_ref_is_safely_blocked(self):
         calls = []
         remote_uri = "https://schemas.invalid/private-schema-value"
