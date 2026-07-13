@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+.agent_history
+.mcp.json
+.agent_data/
+.code_agent/
+.matplotlib_cache/
+logs/
+agent_write/*
+
+memory/**/*.md
+dayreadme.md
