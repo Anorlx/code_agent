@@ -139,10 +139,17 @@ _SCHEMA_VALIDATION_KEYS = {
 
 def _validate_schema_value(
     value: Any,
-    schema: dict[str, Any],
+    schema: Any,
     *,
     path: str = "$",
 ) -> str | None:
+    if schema is True:
+        return None
+    if schema is False:
+        return f"{path} is rejected by the schema."
+    if not isinstance(schema, dict):
+        return f"{path} has an invalid schema."
+
     unsupported = set(schema) - _SCHEMA_ANNOTATION_KEYS - _SCHEMA_VALIDATION_KEYS
     if unsupported:
         return f"{path} uses an unsupported schema constraint."
@@ -297,8 +304,12 @@ def _validate_tool_input(
 ) -> dict[str, Any]:
     name = _tool_name(tool_call)
     arguments = _tool_arguments(tool_call)
-    spec = tool_info.get("spec") or {}
-    parameters = spec.get("parameters") or {}
+    spec = tool_info.get("spec", {})
+    parameters = (
+        spec.get("parameters", {})
+        if isinstance(spec, dict)
+        else None
+    )
     if name is None:
         return {
             "action": "ask",
@@ -316,10 +327,7 @@ def _validate_tool_input(
             "reason": "工具参数不是对象，需要用户确认是否继续。",
         }
 
-    if not isinstance(parameters, dict):
-        schema_error = "Tool parameter schema is invalid."
-    else:
-        schema_error = _validate_schema_value(arguments, parameters)
+    schema_error = _validate_schema_value(arguments, parameters)
     if schema_error is not None:
         logger.debug("tool input schema validation failed: %s", schema_error)
         return {

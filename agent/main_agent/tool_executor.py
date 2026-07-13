@@ -109,13 +109,12 @@ class StreamingToolExecutor:
             message = (tracked.result_event or {}).get("message") or {}
             result = message.get("raw_result") if isinstance(message, dict) else None
             result_arguments = message.get("arguments") if isinstance(message, dict) else None
-            arguments = (
-                result_arguments
-                if isinstance(result_arguments, dict)
-                else tracked.effective_arguments
-                if tracked.effective_arguments is not None
-                else _tool_arguments(tracked.tool_call)
-            )
+            if tracked.effective_arguments is not None:
+                arguments = tracked.effective_arguments
+            elif isinstance(result_arguments, dict):
+                arguments = result_arguments
+            else:
+                arguments = _tool_arguments(tracked.tool_call)
             states.append(
                 {
                     "tool_call_id": tracked.tool_call.get("id", tracked.name),

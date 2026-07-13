@@ -59,6 +59,72 @@ def result_events(events):
 
 
 class ToolHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_boolean_and_malformed_parameter_schemas_fail_closed(self):
+        rejected_schemas = [False, [], ""]
+
+        for parameters in rejected_schemas:
+            with self.subTest(parameters=parameters):
+                calls = []
+
+                async def run(arguments):
+                    calls.append(arguments)
+                    return {"ok": True, "content": "must not run"}
+
+                events = await collect_tool_events(
+                    [{"id": "call-1", "name": "schema_tool", "arguments": {"n": 1}}],
+                    {
+                        "schema_tool": {
+                            "run": run,
+                            "permission": "allow",
+                            "parallel_safe": True,
+                            "spec": {"parameters": parameters},
+                        }
+                    },
+                )
+
+                self.assertEqual(calls, [])
+                message = result_events(events)[0]["message"]
+                self.assertFalse(message["raw_result"]["ok"])
+                self.assertEqual(message["raw_result"]["review"]["stage"], "validateInput")
+                self.assertNotIn(repr(parameters), message["raw_result"]["error"])
+
+        accepted_calls = []
+
+        async def accepted_run(arguments):
+            accepted_calls.append(arguments)
+            return {"ok": True, "content": "accepted"}
+
+        accepted_events = await collect_tool_events(
+            [{"id": "call-2", "name": "schema_tool", "arguments": {"anything": 1}}],
+            {
+                "schema_tool": {
+                    "run": accepted_run,
+                    "permission": "allow",
+                    "parallel_safe": True,
+                    "spec": {"parameters": True},
+                }
+            },
+        )
+
+        self.assertEqual(accepted_calls, [{"anything": 1}])
+        self.assertEqual(result_events(accepted_events)[0]["message"]["content"], "accepted")
+
+        missing_spec_events = await collect_tool_events(
+            [{"id": "call-3", "name": "schema_tool", "arguments": {"anything": 2}}],
+            {
+                "schema_tool": {
+                    "run": accepted_run,
+                    "permission": "allow",
+                    "parallel_safe": True,
+                }
+            },
+        )
+        self.assertEqual(accepted_calls[-1], {"anything": 2})
+        self.assertEqual(
+            result_events(missing_spec_events)[0]["message"]["content"],
+            "accepted",
+        )
+
     async def test_before_recursively_validates_array_items_and_nested_objects(self):
         schema = {
             "type": "object",
@@ -901,6 +967,44 @@ class ToolHookTests(unittest.IsolatedAsyncioTestCase):
 
         release_runner.set()
         await executor.finish()
+
+    async def test_completed_checkpoint_keeps_executed_not_presented_arguments(self):
+        manager = HookManager()
+
+        async def after(event):
+            return HookResult(
+                action=HookAction.MODIFY,
+                updated_payload={
+                    **event.payload,
+                    "arguments": {"n": 99},
+                    "result": {"ok": True, "content": "presented"},
+                },
+            )
+
+        async def run(arguments):
+            self.assertEqual(arguments, {"n": 1})
+            return {"ok": True, "content": "executed"}
+
+        manager.register("tool.after", after)
+        executor = StreamingToolExecutor(
+            user_input="run",
+            messages=[],
+            tools=number_tool(run),
+            permission_reviewer=None,
+            permission_prompter=None,
+            reviewer_model_name="reviewer",
+            memory_context=None,
+            runtime_context={},
+            hook_manager=manager,
+        )
+        executor.submit({"id": "call-1", "name": "number", "arguments": {"n": 1}})
+        await executor.finish()
+
+        self.assertEqual(executor.results[0]["arguments"], {"n": 99})
+        self.assertEqual(executor.results[0]["content"], "presented")
+        checkpoint = executor.checkpoint_tool_states()[0]
+        self.assertEqual(checkpoint["arguments"], {"n": 1})
+        self.assertEqual(checkpoint["result"], {"ok": True, "content": "presented"})
 
     def test_hook_runtime_parameters_are_keyword_only(self):
         parameters = inspect.signature(run_tool_subagent).parameters
