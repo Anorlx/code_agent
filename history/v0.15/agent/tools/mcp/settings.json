@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "amap-maps": {
+      "permission": "ask",
+      "allowedTools": ["*"],
+      "deniedTools": [],
+      "description": "高德地图 MCP：地理编码、逆地理编码、地点搜索、路线规划等地图能力。"
+    },
+    "tavily": {
+      "permission": "ask",
+      "allowedTools": ["*"],
+      "deniedTools": [],
+      "description": "Tavily MCP：联网搜索、网页内容提取、站点地图发现和网页爬取。"
+    }
+  }
+}

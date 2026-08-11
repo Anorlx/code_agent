@@ -1,0 +1,197 @@
+<svg width="1660" height="1080" viewBox="0 0 1660 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .bg { fill: #f7f9fc; }
+      .title { font: 800 38px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #172033; }
+      .subtitle { font: 500 18px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #64748b; }
+      .entity-title { font: 800 17px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #172033; }
+      .entity-field { font: 500 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #5d6b80; }
+      .rel { font: 700 12px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #53657b; }
+      .note-title { font: 800 16px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #172033; }
+      .note-text { font: 500 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; fill: #5d6b80; }
+      .entity { fill: #ffffff; stroke: #cbd7e5; stroke-width: 1.6; rx: 14; }
+      .primary { fill: #eef7ff; stroke: #3b8fd8; stroke-width: 2.2; rx: 14; }
+      .sub { fill: #f0fbf4; stroke: #4caf70; stroke-width: 2.2; rx: 14; }
+      .tool { fill: #fff8eb; stroke: #df9d2f; stroke-width: 2.2; rx: 14; }
+      .store { fill: #f8f1ff; stroke: #9870cc; stroke-width: 2.2; rx: 14; }
+      .model { fill: #f1f5f9; stroke: #8395ad; stroke-width: 2.2; rx: 14; }
+      .line { fill: none; stroke: #748397; stroke-width: 2; marker-end: url(#arrow); }
+      .line-main { fill: none; stroke: #2678bd; stroke-width: 2.8; marker-end: url(#arrowMain); }
+      .line-soft { fill: none; stroke: #adb8c7; stroke-width: 1.6; marker-end: url(#arrowSoft); }
+      .dash { stroke-dasharray: 7 7; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#748397"/>
+    </marker>
+    <marker id="arrowMain" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#2678bd"/>
+    </marker>
+    <marker id="arrowSoft" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#adb8c7"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1660" height="1080"/>
+  <text class="title" x="64" y="70">Agent ER 流程图</text>
+  <text class="subtitle" x="64" y="102">用实体关系的方式看完整运行链路：会话输入 → 主 Agent 状态图 → 子 Agent 决策 → 工具执行 → 状态/记忆落盘</text>
+
+  <rect class="primary" x="80" y="170" width="220" height="110"/>
+  <text class="entity-title" x="108" y="204">User / Terminal</text>
+  <text class="entity-field" x="108" y="232">user_input</text>
+  <text class="entity-field" x="108" y="254">exit / /@ / /session</text>
+
+  <rect class="primary" x="380" y="160" width="250" height="130"/>
+  <text class="entity-title" x="408" y="194">CLI chat_loop</text>
+  <text class="entity-field" x="408" y="222">加载工具</text>
+  <text class="entity-field" x="408" y="244">选择/恢复会话</text>
+  <text class="entity-field" x="408" y="266">打印流式事件</text>
+
+  <rect class="store" x="730" y="130" width="250" height="100"/>
+  <text class="entity-title" x="758" y="164">SessionStore</text>
+  <text class="entity-field" x="758" y="192">sessions</text>
+  <text class="entity-field" x="758" y="214">session_messages</text>
+
+  <rect class="store" x="730" y="260" width="250" height="100"/>
+  <text class="entity-title" x="758" y="294">CheckpointStore</text>
+  <text class="entity-field" x="758" y="322">run_checkpoints</text>
+  <text class="entity-field" x="758" y="344">resume / completed / failed</text>
+
+  <rect class="store" x="1080" y="160" width="250" height="130"/>
+  <text class="entity-title" x="1108" y="194">Memory Store</text>
+  <text class="entity-field" x="1108" y="222">MEMORY.md</text>
+  <text class="entity-field" x="1108" y="244">memory/user</text>
+  <text class="entity-field" x="1108" y="266">memory/project / feedback</text>
+
+  <rect class="sub" x="80" y="420" width="250" height="120"/>
+  <text class="entity-title" x="108" y="454">Memory Retrieval</text>
+  <text class="entity-field" x="108" y="482">读取 MEMORY.md 索引</text>
+  <text class="entity-field" x="108" y="504">选择相关记忆正文</text>
+  <text class="entity-field" x="108" y="526">注入 system prompt</text>
+
+  <rect class="primary" x="410" y="420" width="250" height="120"/>
+  <text class="entity-title" x="438" y="454">QueryEngine</text>
+  <text class="entity-field" x="438" y="482">submitMessage()</text>
+  <text class="entity-field" x="438" y="504">包装 run_agent()</text>
+  <text class="entity-field" x="438" y="526">输出 async events</text>
+
+  <rect class="primary" x="760" y="410" width="280" height="140"/>
+  <text class="entity-title" x="788" y="444">LangGraph StateGraph</text>
+  <text class="entity-field" x="788" y="472">preprocess</text>
+  <text class="entity-field" x="788" y="494">api_call</text>
+  <text class="entity-field" x="788" y="516">result_backfill / verify</text>
+  <text class="entity-field" x="788" y="538">termination_check</text>
+
+  <rect class="model" x="1140" y="410" width="250" height="140"/>
+  <text class="entity-title" x="1168" y="444">DashScope Client</text>
+  <text class="entity-field" x="1168" y="472">glm-5 主模型</text>
+  <text class="entity-field" x="1168" y="494">qwen 子 Agent</text>
+  <text class="entity-field" x="1168" y="516">stream delta / tool_call</text>
+  <text class="entity-field" x="1168" y="538">token_usage</text>
+
+  <rect class="sub" x="80" y="690" width="250" height="140"/>
+  <text class="entity-title" x="108" y="724">Sub Agents</text>
+  <text class="entity-field" x="108" y="752">mode_router</text>
+  <text class="entity-field" x="108" y="774">tool_search</text>
+  <text class="entity-field" x="108" y="796">permission_review</text>
+  <text class="entity-field" x="108" y="818">memory_writer</text>
+
+  <rect class="tool" x="410" y="690" width="250" height="140"/>
+  <text class="entity-title" x="438" y="724">Tool Executor</text>
+  <text class="entity-field" x="438" y="752">StreamingToolExecutor</text>
+  <text class="entity-field" x="438" y="774">边流式边提交工具</text>
+  <text class="entity-field" x="438" y="796">并发执行</text>
+  <text class="entity-field" x="438" y="818">按原顺序回填</text>
+
+  <rect class="tool" x="760" y="690" width="250" height="140"/>
+  <text class="entity-title" x="788" y="724">Tool Runner</text>
+  <text class="entity-field" x="788" y="752">参数 Schema 校验</text>
+  <text class="entity-field" x="788" y="774">权限规则 / 用户确认</text>
+  <text class="entity-field" x="788" y="796">执行 run()</text>
+  <text class="entity-field" x="788" y="818">生成 tool_result</text>
+
+  <rect class="tool" x="1110" y="660" width="250" height="100"/>
+  <text class="entity-title" x="1138" y="694">Local Tool Registry</text>
+  <text class="entity-field" x="1138" y="722">read/write/grep/run</text>
+  <text class="entity-field" x="1138" y="744">calc/time/memory/context</text>
+
+  <rect class="tool" x="1110" y="800" width="250" height="100"/>
+  <text class="entity-title" x="1138" y="834">MCP Tool Registry</text>
+  <text class="entity-field" x="1138" y="862">.mcp.json discover</text>
+  <text class="entity-field" x="1138" y="884">mcp__server__tool</text>
+
+  <rect class="sub" x="1420" y="690" width="190" height="140"/>
+  <text class="entity-title" x="1448" y="724">Orchestrators</text>
+  <text class="entity-field" x="1448" y="752">fork_tasks</text>
+  <text class="entity-field" x="1448" y="774">coordinator_plan</text>
+  <text class="entity-field" x="1448" y="796">parallel workers</text>
+  <text class="entity-field" x="1448" y="818">research + synthesis</text>
+
+  <rect class="store" x="80" y="940" width="480" height="76"/>
+  <text class="entity-title" x="108" y="972">Post-turn Persistence</text>
+  <text class="entity-field" x="108" y="996">save_messages() / summarize_session() / checkpoint terminal status</text>
+
+  <rect class="store" x="660" y="940" width="430" height="76"/>
+  <text class="entity-title" x="688" y="972">Background Memory Observer</text>
+  <text class="entity-field" x="688" y="996">观察完整对话，抽取长期记忆，写入 memory/*.md</text>
+
+  <rect class="store" x="1190" y="940" width="360" height="76"/>
+  <text class="entity-title" x="1218" y="972">Run Artifacts</text>
+  <text class="entity-field" x="1218" y="996">logs/agent.log / MCP cache / coordinator scratchpad</text>
+
+  <path class="line-main" d="M300 225 L380 225"/>
+  <text class="rel" x="320" y="210">输入</text>
+
+  <path class="line-soft" d="M630 200 L730 180"/>
+  <text class="rel" x="654" y="174">读写</text>
+  <path class="line-soft" d="M630 250 L730 310"/>
+  <text class="rel" x="655" y="297">保存</text>
+  <path class="line-soft" d="M630 225 C810 225 900 225 1080 225"/>
+  <text class="rel" x="820" y="210">召回记忆前置</text>
+
+  <path class="line-main" d="M205 280 L205 420"/>
+  <text class="rel" x="218" y="356">每轮问题</text>
+  <path class="line-soft" d="M330 480 L410 480"/>
+  <text class="rel" x="350" y="465">注入</text>
+  <path class="line-main" d="M660 480 L760 480"/>
+  <text class="rel" x="686" y="465">启动图</text>
+  <path class="line-main" d="M1040 480 L1140 480"/>
+  <text class="rel" x="1062" y="465">调用模型</text>
+  <path class="line-soft" d="M1265 550 C1265 610 900 630 900 690"/>
+  <text class="rel" x="1070" y="620">tool_call</text>
+
+  <path class="line-soft" d="M900 550 C900 610 205 620 205 690"/>
+  <text class="rel" x="518" y="610">预处理委派</text>
+  <path class="line-main" d="M760 760 L660 760"/>
+  <text class="rel" x="684" y="744">提交调用</text>
+  <path class="line-main" d="M660 760 L760 760"/>
+  <text class="rel" x="684" y="790">流式结果</text>
+  <path class="line" d="M1010 735 L1110 710"/>
+  <text class="rel" x="1030" y="708">本地</text>
+  <path class="line" d="M1010 785 L1110 850"/>
+  <text class="rel" x="1030" y="840">MCP</text>
+  <path class="line" d="M1360 760 L1420 760"/>
+  <text class="rel" x="1375" y="744">编排</text>
+
+  <path class="line-main" d="M885 690 C885 620 900 610 900 550"/>
+  <text class="rel" x="914" y="628">tool_result 回填</text>
+  <path class="line-main dash" d="M900 550 C900 600 520 620 520 480"/>
+  <text class="rel" x="622" y="642">有工具则继续下一轮</text>
+
+  <path class="line-soft" d="M900 550 C900 720 320 780 320 940"/>
+  <text class="rel" x="520" y="910">完成后落盘</text>
+  <path class="line-soft" d="M560 978 L660 978"/>
+  <text class="rel" x="588" y="962">观察</text>
+  <path class="line-soft" d="M1090 978 L1190 978"/>
+  <text class="rel" x="1112" y="962">审计</text>
+  <path class="line-soft" d="M875 940 C875 890 1205 360 1205 290"/>
+  <text class="rel" x="1010" y="910">写长期记忆</text>
+
+  <rect x="64" y="120" width="148" height="28" rx="14" fill="#2678bd"/>
+  <text class="tag" x="88" y="139">主路径</text>
+  <rect x="228" y="120" width="148" height="28" rx="14" fill="#4caf70"/>
+  <text class="tag" x="252" y="139">子 Agent</text>
+  <rect x="392" y="120" width="148" height="28" rx="14" fill="#df9d2f"/>
+  <text class="tag" x="416" y="139">工具执行</text>
+  <rect x="556" y="120" width="148" height="28" rx="14" fill="#9870cc"/>
+  <text class="tag" x="580" y="139">状态存储</text>
+</svg>

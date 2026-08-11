@@ -1,0 +1,121 @@
+<svg width="1440" height="620" viewBox="0 0 1440 620" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">code_agent local runtime architecture</title>
+  <desc id="desc">A structured two-column cover for code_agent. The left side introduces the local terminal agent. The right side shows an aligned runtime pipeline for query, tool execution, permission review and memory.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1440" y2="620" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07111F"/>
+      <stop offset="0.52" stop-color="#090D19"/>
+      <stop offset="1" stop-color="#11101A"/>
+    </linearGradient>
+    <linearGradient id="terminal" x1="76" y1="330" x2="596" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071827"/>
+      <stop offset="1" stop-color="#090C14"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#1E293B" stroke-width="1" opacity="0.42"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+    <style>
+      .sans { font-family: Inter, "Segoe UI", Arial, sans-serif; letter-spacing: 0; }
+      .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; letter-spacing: 0; }
+      .header { font-size: 14px; font-weight: 800; fill: #C7D7EA; }
+      .eyebrow { font-size: 14px; font-weight: 800; fill: #55DDF4; }
+      .title { font-size: 64px; font-weight: 900; fill: #F8FAFC; }
+      .subtitle { font-size: 21px; font-weight: 600; fill: #A8BED6; }
+      .section { font-size: 13px; font-weight: 800; fill: #8FA7C0; }
+      .card-title { font-size: 19px; font-weight: 800; fill: #F8FAFC; }
+      .card-copy { font-size: 14px; font-weight: 600; fill: #9FB2C8; }
+      .step { font-size: 13px; font-weight: 900; fill: #07111F; }
+      .terminal-copy { font-size: 15px; font-weight: 700; fill: #DDF6FF; }
+      .terminal-muted { font-size: 13px; font-weight: 600; fill: #7F98B2; }
+      .feature { font-size: 13px; font-weight: 800; fill: #D5E1EF; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="620" fill="url(#background)"/>
+  <rect width="1440" height="620" fill="url(#grid)"/>
+  <rect x="30" y="30" width="1380" height="560" rx="24" fill="#070C15" fill-opacity="0.82" stroke="#29435F" stroke-width="2" filter="url(#shadow)"/>
+
+  <circle cx="72" cy="64" r="6" fill="#FB7185"/>
+  <circle cx="94" cy="64" r="6" fill="#FBBF24"/>
+  <circle cx="116" cy="64" r="6" fill="#34D399"/>
+  <text x="142" y="69" class="sans header">CODE_AGENT / LOCAL RUNTIME</text>
+  <text x="1362" y="69" text-anchor="end" class="mono header">PYTHON · ASYNC · LANGGRAPH</text>
+  <line x1="30" y1="96" x2="1410" y2="96" stroke="#29435F" stroke-width="2"/>
+
+  <text x="76" y="148" class="sans eyebrow">TERMINAL-FIRST CODING AGENT</text>
+  <text x="72" y="222" class="sans title">code_agent</text>
+  <text x="76" y="265" class="sans subtitle">A guarded, stateful runtime for local code work.</text>
+  <text x="76" y="296" class="sans subtitle">Stream responses. Discover tools. Verify outcomes.</text>
+
+  <rect x="76" y="330" width="520" height="150" rx="14" fill="url(#terminal)" stroke="#24415E" stroke-width="2"/>
+  <rect x="76" y="330" width="520" height="36" rx="14" fill="#0D1B2A"/>
+  <path d="M76 352C76 339.85 85.85 330 98 330H574C586.15 330 596 339.85 596 352V366H76V352Z" fill="#0D1B2A"/>
+  <circle cx="99" cy="348" r="4" fill="#55DDF4"/>
+  <text x="114" y="353" class="mono terminal-muted">workspace / current-project</text>
+  <text x="100" y="402" class="mono terminal-copy"><tspan fill="#55DDF4">code_agent&gt;</tspan> inspect, change, verify</text>
+  <text x="100" y="435" class="mono terminal-muted">mode  tools   state  running   permission  guarded</text>
+  <text x="100" y="458" class="mono terminal-muted">streaming output · ordered tool results · checkpoints</text>
+
+  <line x1="636" y1="126" x2="636" y2="480" stroke="#29435F" stroke-width="2"/>
+
+  <text x="680" y="148" class="sans section">RUNTIME PIPELINE</text>
+  <text x="1360" y="148" text-anchor="end" class="mono section">APPEND-ONLY STATE FLOW</text>
+
+  <line x1="706" y1="194" x2="706" y2="424" stroke="#2C4866" stroke-width="3"/>
+
+  <circle cx="706" cy="202" r="17" fill="#55DDF4"/>
+  <text x="706" y="207" text-anchor="middle" class="sans step">01</text>
+  <rect x="742" y="174" width="618" height="56" rx="10" fill="#0A1A28" stroke="#2E9BC2" stroke-width="2"/>
+  <rect x="742" y="174" width="6" height="56" rx="3" fill="#55DDF4"/>
+  <text x="772" y="198" class="sans card-title">Query Engine</text>
+  <text x="772" y="218" class="sans card-copy">submit message · stream model events · accumulate usage</text>
+
+  <circle cx="706" cy="274" r="17" fill="#A78BFA"/>
+  <text x="706" y="279" text-anchor="middle" class="sans step">02</text>
+  <rect x="742" y="246" width="618" height="56" rx="10" fill="#151027" stroke="#8B5CF6" stroke-width="2"/>
+  <rect x="742" y="246" width="6" height="56" rx="3" fill="#A78BFA"/>
+  <text x="772" y="270" class="sans card-title">Streaming Tool Executor</text>
+  <text x="772" y="290" class="sans card-copy">queue · execute safe calls concurrently · yield results in order</text>
+
+  <circle cx="706" cy="346" r="17" fill="#FBBF24"/>
+  <text x="706" y="351" text-anchor="middle" class="sans step">03</text>
+  <rect x="742" y="318" width="618" height="56" rx="10" fill="#211707" stroke="#E79B16" stroke-width="2"/>
+  <rect x="742" y="318" width="6" height="56" rx="3" fill="#FBBF24"/>
+  <text x="772" y="342" class="sans card-title">Permission Gate</text>
+  <text x="772" y="362" class="sans card-copy">validate schema · match policy · review context · ask user</text>
+
+  <circle cx="706" cy="418" r="17" fill="#4ADE80"/>
+  <text x="706" y="423" text-anchor="middle" class="sans step">04</text>
+  <rect x="742" y="390" width="618" height="56" rx="10" fill="#0B2015" stroke="#22C55E" stroke-width="2"/>
+  <rect x="742" y="390" width="6" height="56" rx="3" fill="#4ADE80"/>
+  <text x="772" y="414" class="sans card-title">Memory and Checkpoint</text>
+  <text x="772" y="434" class="sans card-copy">retrieve relevant context · observe decisions · persist recoverable state</text>
+
+  <line x1="76" y1="514" x2="1360" y2="514" stroke="#29435F" stroke-width="2"/>
+  <text x="76" y="551" class="sans section">CAPABILITIES</text>
+
+  <rect x="198" y="538" width="8" height="8" rx="2" fill="#55DDF4"/>
+  <text x="218" y="549" class="sans feature">MCP</text>
+  <rect x="294" y="538" width="8" height="8" rx="2" fill="#F472B6"/>
+  <text x="314" y="549" class="sans feature">SKILLS</text>
+  <rect x="406" y="538" width="8" height="8" rx="2" fill="#A78BFA"/>
+  <text x="426" y="549" class="sans feature">FORK</text>
+  <rect x="508" y="538" width="8" height="8" rx="2" fill="#4ADE80"/>
+  <text x="528" y="549" class="sans feature">COORDINATOR</text>
+  <rect x="674" y="538" width="8" height="8" rx="2" fill="#FBBF24"/>
+  <text x="694" y="549" class="sans feature">CACHE</text>
+  <rect x="782" y="538" width="8" height="8" rx="2" fill="#60A5FA"/>
+  <text x="802" y="549" class="sans feature">CONTEXT</text>
+  <rect x="908" y="538" width="8" height="8" rx="2" fill="#FB7185"/>
+  <text x="928" y="549" class="sans feature">RETRY</text>
+  <rect x="1016" y="538" width="8" height="8" rx="2" fill="#2DD4BF"/>
+  <text x="1036" y="549" class="sans feature">VERIFY</text>
+  <rect x="1132" y="538" width="8" height="8" rx="2" fill="#C084FC"/>
+  <text x="1152" y="549" class="sans feature">SESSION</text>
+  <rect x="1260" y="538" width="8" height="8" rx="2" fill="#94A3B8"/>
+  <text x="1280" y="549" class="sans feature">STATE</text>
+</svg>

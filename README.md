@@ -1,7 +1,7 @@
 # code_agent
 
 <p align="center">
-  <img src="./assets/main-readme-tech-cover.svg" alt="code_agent cybernetic runtime cover" width="100%">
+  <img src="./assets/code-agent-runtime-cover.svg" alt="code_agent local runtime architecture" width="100%">
 </p>
 
 _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具实时执行、权限审查、长期记忆、MCP 动态工具、Fork 并行调查和 Coordinator 规划被组织成一套可观察、可扩展、可控的 Agent 系统。_
@@ -30,9 +30,9 @@ _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具
 | --- | --- | --- |
 | `QueryEngine` + `StateGraph` 组成一轮可观察执行链路 | 模型流式输出时就能捕获 tool call，并展示工具状态 | schema、权限规则、上下文风险和用户确认在同一条安全门 |
 
-| [Tool fabric](#tool-fabric) | [Memory context](#memory-context) | [Orchestration](#orchestration-layer) |
-| --- | --- | --- |
-| 内置工具、MCP、skills 进入统一 registry | 长期记忆和上下文压缩共同支撑长任务 | Fork 并行调查，Coordinator 综合实施规格 |
+| [Tool fabric](#tool-fabric) | [Lifecycle Hooks](#lifecycle-hooks) | [Memory context](#memory-context) | [Orchestration](#orchestration-layer) |
+| --- | --- | --- | --- |
+| 内置工具、MCP、skills 进入统一 registry | typed async 生命周期扩展，不绕过权限门 | 长期记忆和上下文压缩共同支撑长任务 | Fork 并行调查，Coordinator 综合实施规格 |
 
 <a id="system-console"></a>
 
@@ -44,6 +44,7 @@ _一个本地优先的 Python Coding Agent runtime：模型流式输出、工具
 | Terminal cockpit | 会话选择、流式输出、工具状态、权限确认、token/context 事件 | `agent/main_agent/cli.py`, `agent/main_agent/terminal_ui.py` |
 | Tool fabric | 内置工具、MCP 工具、skills 预留统一成 function schema | `agent/tools/registry.py`, `agent/tools/tool/`, `agent/tools/mcp/`, `agent/tools/skills/` |
 | Safety gate | schema 校验、权限规则、上下文审查、用户确认 | `agent/sub_agent/tool_runner.py`, `agent/sub_agent/permission_review.py` |
+| Lifecycle Hooks | typed event/result 协议、优先级调度、内置 manager 构造 | `agent/hooks/types.py`, `agent/hooks/manager.py`, `agent/hooks/builtin.py` |
 | Context engine | snip、micro compact、collapse、auto compact，支撑长任务运行 | `agent/main_agent/context_manager.py` |
 | Memory mesh | 长期记忆索引、TTL、score、后台观察和检索 | `agent/memory_system/`, `agent/sub_agent/memory_retrieval.py` |
 | Orchestration | Fork worker 并行只读调查，Coordinator 生成实施规格 | `agent/fork/`, `agent/Coordinator/` |
@@ -151,6 +152,104 @@ flowchart TB
 </p>
 
 截图里的 `run_command` 被 `validateInput` 拦住：`command` 参数不是 schema 要求的数组，所以系统展示风险、阶段和原因，等待用户本次允许或拒绝。
+
+<a id="lifecycle-hooks"></a>
+
+## 🪝 lifecycle hooks
+
+Lifecycle Hooks 是 runtime 的 typed async 扩展点：嵌入方可以在稳定的生命周期边界观察事件、修改受支持的 payload，或者显式阻止某次操作。它不替代 permission review；permission review 判断原始工具调用是否被授权，Hook 则在已经定义好的运行阶段扩展行为。具体的参数授权边界见下文。
+
+### Supported events
+
+| Event | Trigger | Allowed actions |
+| --- | --- | --- |
+| `session.start` | CLI 选择或创建 session，并完成 checkpoint recovery 后 | `continue`, `modify` |
+| `session.end` | CLI 退出、终止或出错时，在后台任务 drain 之前 | `continue` |
+| `prompt.before` | 用户 prompt 进入 Agent graph 之前 | `continue`, `modify`, `block` |
+| `tool.before` | permission review 放行后、实际执行工具之前 | `continue`, `modify`, `block` |
+| `tool.after` | 工具成功返回后 | `continue`, `modify` |
+| `tool.error` | 工具失败或执行抛错后 | `continue`, `modify`, `retry` |
+| `context.before_compact` | 自动 context compaction 即将执行时 | `continue`, `modify`, `block` |
+| `agent.before_stop` | Agent 正常完成即将提交时 | `continue`, `block` |
+
+### Async registration
+
+下面的例子使用当前 public API。`register()` 返回幂等的 unregister callback；`QueryEngine` 通过 `hook_manager=` 接收同一个 manager。
+
+```python
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
+
+from agent.hooks import HookAction, HookEvent, HookManager, HookResult
+from agent.main_agent.query_engine import QueryEngine
+
+
+async def model_call(**request: Any) -> AsyncIterator[dict[str, Any]]:
+    system_prompt = str(request.get("system_prompt") or "")
+    if "Agent Mode Router" in system_prompt:
+        yield {
+            "type": "assistant_delta",
+            "content": '{"mode":"chat","confidence":1,"reason":"example"}',
+        }
+    else:
+        yield {"type": "assistant_delta", "content": "Hooked prompt accepted."}
+
+
+async def add_project_policy(event: HookEvent) -> HookResult:
+    return HookResult(
+        action=HookAction.MODIFY,
+        updated_payload={
+            **event.payload,
+            "user_input": (
+                f"{event.payload['user_input']}\nFollow the repository policy."
+            ),
+        },
+    )
+
+
+async def main() -> None:
+    hook_manager = HookManager()
+    unregister = hook_manager.register(
+        "prompt.before",
+        add_project_policy,
+        priority=50,
+    )
+    engine = QueryEngine(model_call=model_call, hook_manager=hook_manager)
+    try:
+        async for event in engine.submit_message("Summarize this repository"):
+            if event["type"] == "assistant_delta":
+                print(event["content"], end="")
+            elif event["type"] == "terminal":
+                print(f"\nterminal: {event['reason']}")
+    finally:
+        unregister()
+
+
+asyncio.run(main())
+```
+
+### Dispatch and safety semantics
+
+- 较小的 numeric priority 先运行；相同 priority 严格保持注册顺序。`modify` 的完整新 payload 会传给后续 handler，合法的 `block` 会立即停止当前 dispatch。
+- 每个 handler 都收到独立的 deep copy。`payload`、`metadata` 和返回的 `updated_payload` 必须是可 `deepcopy` 的 JSON-like 数据（dictionary、list、string、number、boolean 或 `None`），不要直接修改收到的 event。
+- 不支持的 action、缺失或不合法的 payload、timeout 和 exception 都会被隔离；除合法 `block`/`retry` 外，后续 handler 和 runtime 继续运行。Runtime 发出的 `hook_error` / `hook_blocked` 与日志诊断是 opaque 的，只包含 event/handler/error type 等安全结构字段。直接在可信进程内调用 `HookManager.emit()` 时，返回的 `HookResult.failures` 会保留 `HookFailure.message` 供 programmatic inspection；不要把这个 raw message 或其他 prompt、参数、结果、reason、凭据及 sensitive data 写入日志。
+- `tool.error` 最多触发一次 Hook retry；第二次 retry 请求被拒绝，从而不会形成循环。
+
+工具路径固定为 `permission review（原始 tool call）→ tool.before → execution → tool.after/tool.error`。Python Hook 是 trusted extension；`tool.before` 修改和 `tool.error` retry 必须保持同一个工具名并通过本地 schema guard，但两者都不会再次经过 permission review。`tool.before` handler 必须自行校验并授权它产生的参数修改；retry 不会重新发出 `tool.before`，因此返回 `RETRY` 的 `tool.error` handler（或其 policy）必须自行校验并授权 retry arguments，否则应禁用 retry。结果 payload 也会被事件级校验。当前没有 external command Hook loader，也不允许 JSON Schema 通过 HTTP 或 file reference 拉取外部内容。
+
+`context.before_compact` 的 `block` 只跳过当前一次 automatic compaction，下一次达到阈值时仍可再次发出事件。`agent.before_stop` 的 `block` 会让 graph 继续下一轮，但仍受 `max_turns` 等现有硬边界约束；legacy `stop_hook` 继续受支持，并在 structured before-stop handler 之后保持原有行为。
+
+CLI 为进程创建并复用一个 manager：session 选择/创建与 checkpoint recovery 完成后发出一次 `session.start`，进入 runtime 后无论正常退出、中断、取消或错误都在后台 drain 前至多发出一次 `session.end`。`create_default_hook_manager()` 当前返回没有注册 behavior-changing handler 的空 manager，方便应用显式注册自己的策略。
+
+`model.before` / `model.after` 有意 deferred：当前模型路径包含 partial streaming output 和 transient retry，尚未稳定定义 handler 应按每次 attempt 还是每个 logical request 运行，以及 partial output 何时算作 `after`。External command Hooks 同样未提供。
+
+完整约束见 [`AGENTS.md`](AGENTS.md)，public implementation 位于 [`agent/hooks/`](agent/hooks/)。完成 editable install 后，先激活所选的 Python 3.10+ environment，再运行 complete suite 和 compile check：
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py' -v
+python -m compileall -q agent tests
+```
 
 <a id="tool-fabric"></a>
 
@@ -264,6 +363,10 @@ flowchart TB
 
 ```text
 agent/
+  hooks/
+    types.py              event/action/result types and allowed decisions
+    manager.py            registration, stable priority dispatch and isolation
+    builtin.py            empty default HookManager construction
   main_agent/
     query_engine.py       streaming submit_message runtime
     graph.py              LangGraph StateGraph runtime

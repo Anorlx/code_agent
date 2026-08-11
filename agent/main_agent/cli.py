@@ -5,9 +5,16 @@ import asyncio
 import logging
 import sys
 import time
-from dataclasses import dataclass
-from typing import Any
+from copy import deepcopy
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Literal
 
+from agent.hooks import (
+    HookEvent,
+    HookFailure,
+    HookManager,
+    create_default_hook_manager,
+)
 from agent.main_agent.checkpoint_store import CheckpointRecord, CheckpointStore
 from agent.main_agent.config import SESSION_DB_PATH
 from agent.main_agent.logging_config import configure_agent_logging
@@ -33,6 +40,8 @@ from agent.tools.skills.registry import load_skill_registry, resolve_skill_slash
 
 logger = logging.getLogger(__name__)
 
+SessionRuntimeOutcome = Literal["completed", "input_interrupted"]
+
 
 @dataclass
 class ToolLoadResult:
@@ -46,6 +55,163 @@ class CheckpointStartupAction:
     pending_input: str | None = None
     history: list[dict[str, Any]] | None = None
     main_agent_saved_memory: bool = False
+
+
+@dataclass
+class SessionEndState:
+    emitted: bool = False
+
+
+@dataclass
+class SessionRuntimeState:
+    history: list[dict[str, Any]]
+    main_agent_saved_memory: bool
+    termination_reason: str = "unexpected_error"
+    status: str = "error"
+
+
+def _lifecycle_hook_error_event(
+    event_name: str,
+    failure: HookFailure,
+    *,
+    payload_error: bool = False,
+) -> dict[str, Any]:
+    message = (
+        f"Invalid lifecycle hook payload for {event_name}; previous value preserved."
+        if payload_error
+        else f"Hook handler failed during {event_name}."
+    )
+    return {
+        "type": "hook_error",
+        "event_name": event_name,
+        "handler_name": failure.handler_name,
+        "error_type": failure.error_type,
+        "message": message,
+    }
+
+
+def _lifecycle_payload_error(event_name: str) -> dict[str, Any]:
+    return _lifecycle_hook_error_event(
+        event_name,
+        HookFailure(
+            handler_name=f"{event_name} payload",
+            error_type="HookPayloadError",
+            message="invalid lifecycle payload",
+        ),
+        payload_error=True,
+    )
+
+
+async def emit_session_start(
+    hook_manager: HookManager | None,
+    session_record: SessionRecord,
+    history: list[dict[str, Any]],
+    *,
+    recovered: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Emit session.start and return a validated, caller-independent payload."""
+    events: list[dict[str, Any]] = []
+    try:
+        original_history = deepcopy(history)
+    except Exception:
+        original_history = list(history)
+        events.append(_lifecycle_payload_error("session.start"))
+    original = {
+        "session_id": str(session_record.id),
+        "title": str(session_record.title),
+        "history": original_history,
+        "recovered": bool(recovered),
+    }
+    if hook_manager is None:
+        return original, events
+
+    result = await hook_manager.emit(
+        HookEvent("session.start", original["session_id"], original)
+    )
+    events.extend(
+        _lifecycle_hook_error_event("session.start", failure)
+        for failure in result.failures
+    )
+    candidate = result.updated_payload or {}
+    validated = {
+        "session_id": original["session_id"],
+        "title": original["title"],
+        "history": original["history"],
+        "recovered": original["recovered"],
+    }
+
+    if "session_id" in candidate and candidate["session_id"] != original["session_id"]:
+        events.append(_lifecycle_payload_error("session.start"))
+    if "title" in candidate:
+        if isinstance(candidate["title"], str):
+            try:
+                validated["title"] = str(candidate["title"])
+            except Exception:
+                events.append(_lifecycle_payload_error("session.start"))
+        else:
+            events.append(_lifecycle_payload_error("session.start"))
+    if "history" in candidate:
+        updated_history = candidate["history"]
+        if isinstance(updated_history, list) and all(
+            isinstance(message, dict) for message in updated_history
+        ):
+            try:
+                validated["history"] = deepcopy(updated_history)
+            except Exception:
+                events.append(_lifecycle_payload_error("session.start"))
+        else:
+            events.append(_lifecycle_payload_error("session.start"))
+    if "recovered" in candidate:
+        if isinstance(candidate["recovered"], bool):
+            validated["recovered"] = bool(candidate["recovered"])
+        else:
+            events.append(_lifecycle_payload_error("session.start"))
+
+    events.append(
+        {
+            "type": "session_hook",
+            "event_name": "session.start",
+            "status": "continued",
+        }
+    )
+    return validated, events
+
+
+async def emit_session_end(
+    hook_manager: HookManager | None,
+    *,
+    session_id: str,
+    termination_reason: str,
+    status: str,
+    message_count: int,
+) -> list[dict[str, Any]]:
+    """Emit the observation-only session.end lifecycle event."""
+    if hook_manager is None:
+        return []
+    result = await hook_manager.emit(
+        HookEvent(
+            "session.end",
+            session_id,
+            {
+                "session_id": session_id,
+                "termination_reason": termination_reason,
+                "status": status,
+                "message_count": message_count,
+            },
+        )
+    )
+    events = [
+        _lifecycle_hook_error_event("session.end", failure)
+        for failure in result.failures
+    ]
+    events.append(
+        {
+            "type": "session_hook",
+            "event_name": "session.end",
+            "status": "observed",
+        }
+    )
+    return events
 
 
 def _parse_arguments(arguments: Any) -> dict[str, Any]:
@@ -347,6 +513,37 @@ def _print_event(event: dict[str, Any], ui: TerminalUI) -> None:
         text = f"{event.get('agent')} messages={context.get('message_count')} ctx≈{context.get('estimated_tokens')}"
         print(ui.event_line("sub ctx", text, "blue"))
         logger.info("sub_context agent=%s context=%s", event.get("agent"), context)
+    elif event_type == "hook_error":
+        _close_assistant_line(ui)
+        event_name = str(event.get("event_name") or "unknown")
+        handler_name = str(event.get("handler_name") or "unknown")
+        error_type = str(event.get("error_type") or "HookError")
+        detail = f"{event_name} handler={handler_name} error={error_type}"
+        print(ui.event_line("hook error", detail, "red"))
+        logger.info(
+            "hook_error event=%s handler=%s error_type=%s",
+            event_name,
+            handler_name,
+            error_type,
+        )
+    elif event_type == "hook_blocked":
+        _close_assistant_line(ui)
+        event_name = str(event.get("event_name") or "unknown")
+        print(ui.event_line("hook block", f"{event_name} ignored", "yellow"))
+        logger.info("hook_blocked event=%s", event_name)
+    elif event_type == "hook_retry":
+        _close_assistant_line(ui)
+        event_name = str(event.get("event_name") or event.get("name") or "tool.error")
+        attempt = event.get("attempt")
+        detail = event_name if attempt is None else f"{event_name} attempt={attempt}"
+        print(ui.event_line("hook retry", detail, "yellow"))
+        logger.info("hook_retry event=%s attempt=%s", event_name, attempt)
+    elif event_type in {"session_hook", "session_hook_status"}:
+        _close_assistant_line(ui)
+        event_name = str(event.get("event_name") or "unknown")
+        status = str(event.get("status") or "observed")
+        print(ui.event_line("session hook", f"{event_name} {status}", "blue"))
+        logger.info("session_hook event=%s status=%s", event_name, status)
 
 
 async def _selector(
@@ -813,8 +1010,30 @@ async def _shutdown_background_tasks(
     summary_tasks: set[asyncio.Task[Any]],
     history: list[dict[str, Any]],
     main_agent_saved_memory: bool,
-    session_id: str,
+    *,
+    hook_manager: HookManager | None = None,
+    session_id: str | None = None,
+    termination_reason: str = "completed",
+    status: str = "completed",
+    end_state: SessionEndState | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
+    """Emit session.end at most once, then drain memory and summaries."""
+    if session_id is not None and not (
+        end_state is not None and end_state.emitted
+    ):
+        if end_state is not None:
+            end_state.emitted = True
+        events = await emit_session_end(
+            hook_manager,
+            session_id=session_id,
+            termination_reason=termination_reason,
+            status=status,
+            message_count=len(history),
+        )
+        if event_sink is not None:
+            for event in events:
+                event_sink(event)
     if history:
         await memory_observer.flush(
             history,
@@ -826,37 +1045,45 @@ async def _shutdown_background_tasks(
     await _drain_tasks(summary_tasks)
 
 
-async def chat_loop(max_turns: int, color: bool = False) -> None:
-    ui = TerminalUI(color=color and sys.stdout.isatty())
-    startup_started = time.perf_counter()
-    session_store = SessionStore()
-    checkpoint_store = CheckpointStore()
-    tools_task = asyncio.create_task(_load_tools(ui))
-    session_setup_started = time.perf_counter()
-    await asyncio.gather(session_store.setup(), checkpoint_store.setup())
-    await checkpoint_store.cleanup_old()
-    session_setup_ms = int((time.perf_counter() - session_setup_started) * 1000)
-    try:
-        session_select_started = time.perf_counter()
-        session_record, history = await _choose_session(session_store, ui)
-        session_select_ms = int((time.perf_counter() - session_select_started) * 1000)
-        checkpoint_action = await _handle_checkpoint_on_start(
-            checkpoint_store=checkpoint_store,
-            session_store=session_store,
-            session_record=session_record,
-            history=history,
-            ui=ui,
-        )
-        history = checkpoint_action.history if checkpoint_action.history is not None else history
-        pending_user_input = checkpoint_action.pending_input
-        last_main_agent_saved_memory = checkpoint_action.main_agent_saved_memory
-    except (EOFError, KeyboardInterrupt):
-        if not tools_task.done():
-            tools_task.cancel()
-        print(ui.event_line("terminal", "aborted_streaming", "red"))
-        logger.info("chat_loop aborted while choosing session")
-        return
-    summary_tasks: set[asyncio.Task[Any]] = set()
+def _create_query_engine(
+    *,
+    tools: dict[str, dict[str, Any]],
+    checkpoint_store: CheckpointStore,
+    session_id: str,
+    max_turns: int,
+    ui: TerminalUI,
+    hook_manager: HookManager,
+) -> QueryEngine:
+    return QueryEngine(
+        model_call=dashscope_stream_chat,
+        tools=tools,
+        tool_selector=_selector,
+        permission_reviewer=_permission_reviewer,
+        permission_prompter=_make_permission_prompter(ui),
+        checkpoint_store=checkpoint_store,
+        session_id=session_id,
+        max_turns=max_turns,
+        hook_manager=hook_manager,
+    )
+
+
+async def _run_session_runtime(
+    *,
+    max_turns: int,
+    startup_started: float,
+    session_setup_ms: int,
+    session_select_ms: int,
+    tools_task: asyncio.Future[ToolLoadResult],
+    session_store: SessionStore,
+    checkpoint_store: CheckpointStore,
+    session_record: SessionRecord,
+    pending_user_input: str | None,
+    hook_manager: HookManager,
+    ui: TerminalUI,
+    summary_tasks: set[asyncio.Task[Any]],
+    memory_observer: MemoryObserver,
+    state: SessionRuntimeState,
+) -> SessionRuntimeOutcome:
     try:
         tool_load_result = await tools_task
         tools = tool_load_result.tools
@@ -896,7 +1123,6 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
             "blue",
         )
     )
-    memory_observer = MemoryObserver(model_call=dashscope_stream_chat)
     reader = create_terminal_input("\ncode_agent> ")
     logger.info("chat_loop started max_turns=%s tools=%s", max_turns, list(tools))
     print(ui.welcome(session_record, reader.name, len(tools), max_turns))
@@ -909,27 +1135,15 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
             try:
                 user_input = await reader.read()
             except (EOFError, KeyboardInterrupt):
+                state.termination_reason = "input_interrupted"
+                state.status = "aborted"
                 print(ui.event_line("terminal", "aborted_streaming", "red"))
-                await _shutdown_background_tasks(
-                    memory_observer,
-                    summary_tasks,
-                    history,
-                    last_main_agent_saved_memory,
-                    session_record.id,
-                )
                 logger.info("chat_loop aborted while reading input")
-                return
+                return "input_interrupted"
         if user_input.lower() in {"exit", "quit"}:
-            await _shutdown_background_tasks(
-                memory_observer,
-                summary_tasks,
-                history,
-                last_main_agent_saved_memory,
-                session_record.id,
-            )
-            print(ui.event_line("terminal", "completed", "green"))
-            logger.info("chat_loop completed by user command")
-            return
+            state.termination_reason = "user_exit"
+            state.status = "completed"
+            return "completed"
         if not user_input:
             continue
         if user_input.startswith("/@"):
@@ -973,20 +1187,18 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
             "memory_context loaded selected_files=%s",
             memory_context_data.get("selected_files", []),
         )
-        engine = QueryEngine(
-            model_call=dashscope_stream_chat,
+        engine = _create_query_engine(
             tools=tools,
-            tool_selector=_selector,
-            permission_reviewer=_permission_reviewer,
-            permission_prompter=_make_permission_prompter(ui),
             checkpoint_store=checkpoint_store,
             session_id=session_record.id,
             max_turns=max_turns,
+            ui=ui,
+            hook_manager=hook_manager,
         )
         last_state = None
         async for event in engine.submitMessage(
             user_input,
-            history=history,
+            history=state.history,
             memory_context=memory_context,
         ):
             _print_event(event, ui)
@@ -998,21 +1210,182 @@ async def chat_loop(max_turns: int, color: bool = False) -> None:
                     list(event["state"].get("messages") or []),
                 )
         if last_state is not None:
-            history = last_state["messages"]
-            last_main_agent_saved_memory = bool(last_state.get("main_agent_saved_memory"))
-            await session_store.save_messages(session_record.id, history)
+            state.history = last_state["messages"]
+            state.main_agent_saved_memory = bool(
+                last_state.get("main_agent_saved_memory")
+            )
+            await session_store.save_messages(session_record.id, state.history)
             _track_task(
                 summary_tasks,
                 asyncio.create_task(
-                    _refresh_session_summary(session_store, session_record.id, history)
+                    _refresh_session_summary(
+                        session_store,
+                        session_record.id,
+                        state.history,
+                    )
                 ),
             )
             memory_observer.observe(
-                history,
-                main_agent_saved_memory=last_main_agent_saved_memory,
+                state.history,
+                main_agent_saved_memory=state.main_agent_saved_memory,
                 session_id=session_record.id,
             )
-            logger.info("history updated messages=%s", len(history))
+            logger.info("history updated messages=%s", len(state.history))
+
+
+async def _run_selected_session(
+    *,
+    max_turns: int,
+    startup_started: float,
+    session_setup_ms: int,
+    session_select_ms: int,
+    tools_task: asyncio.Future[ToolLoadResult],
+    session_store: SessionStore,
+    checkpoint_store: CheckpointStore,
+    session_record: SessionRecord,
+    history: list[dict[str, Any]],
+    pending_user_input: str | None,
+    main_agent_saved_memory: bool,
+    hook_manager: HookManager,
+    ui: TerminalUI,
+    start_events: list[dict[str, Any]] | None = None,
+) -> None:
+    summary_tasks: set[asyncio.Task[Any]] = set()
+    end_state = SessionEndState()
+    state = SessionRuntimeState(history, main_agent_saved_memory)
+    runtime_failed = False
+    memory_observer: MemoryObserver | None = None
+    outcome: SessionRuntimeOutcome | None = None
+    try:
+        memory_observer = MemoryObserver(model_call=dashscope_stream_chat)
+        for event in start_events or []:
+            _print_event(event, ui)
+        outcome = await _run_session_runtime(
+            max_turns=max_turns,
+            startup_started=startup_started,
+            session_setup_ms=session_setup_ms,
+            session_select_ms=session_select_ms,
+            tools_task=tools_task,
+            session_store=session_store,
+            checkpoint_store=checkpoint_store,
+            session_record=session_record,
+            pending_user_input=pending_user_input,
+            hook_manager=hook_manager,
+            ui=ui,
+            summary_tasks=summary_tasks,
+            memory_observer=memory_observer,
+            state=state,
+        )
+    except asyncio.CancelledError:
+        runtime_failed = True
+        state.termination_reason = "cancelled"
+        state.status = "aborted"
+        raise
+    except Exception:
+        runtime_failed = True
+        state.termination_reason = "unexpected_error"
+        state.status = "error"
+        raise
+    finally:
+        try:
+            if memory_observer is None:
+                end_state.emitted = True
+                events = await emit_session_end(
+                    hook_manager,
+                    session_id=session_record.id,
+                    termination_reason=state.termination_reason,
+                    status=state.status,
+                    message_count=len(state.history),
+                )
+                for event in events:
+                    _print_event(event, ui)
+            else:
+                await _shutdown_background_tasks(
+                    memory_observer,
+                    summary_tasks,
+                    state.history,
+                    state.main_agent_saved_memory,
+                    hook_manager=hook_manager,
+                    session_id=session_record.id,
+                    termination_reason=state.termination_reason,
+                    status=state.status,
+                    end_state=end_state,
+                    event_sink=lambda event: _print_event(event, ui),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not runtime_failed:
+                raise
+            logger.exception("session shutdown failed after runtime failure")
+    if outcome == "completed":
+        print(ui.event_line("terminal", "completed", "green"))
+        logger.info("chat_loop completed by user command")
+
+
+async def chat_loop(max_turns: int, color: bool = False) -> None:
+    ui = TerminalUI(color=color and sys.stdout.isatty())
+    hook_manager = create_default_hook_manager()
+    startup_started = time.perf_counter()
+    session_store = SessionStore()
+    checkpoint_store = CheckpointStore()
+    tools_task = asyncio.create_task(_load_tools(ui))
+    session_setup_started = time.perf_counter()
+    await asyncio.gather(session_store.setup(), checkpoint_store.setup())
+    await checkpoint_store.cleanup_old()
+    session_setup_ms = int((time.perf_counter() - session_setup_started) * 1000)
+    try:
+        session_select_started = time.perf_counter()
+        session_record, history = await _choose_session(session_store, ui)
+        session_select_ms = int((time.perf_counter() - session_select_started) * 1000)
+        checkpoint_action = await _handle_checkpoint_on_start(
+            checkpoint_store=checkpoint_store,
+            session_store=session_store,
+            session_record=session_record,
+            history=history,
+            ui=ui,
+        )
+        recovered = (
+            checkpoint_action.pending_input is not None
+            or (
+                checkpoint_action.history is not None
+                and checkpoint_action.history is not history
+            )
+        )
+        history = checkpoint_action.history if checkpoint_action.history is not None else history
+        pending_user_input = checkpoint_action.pending_input
+        last_main_agent_saved_memory = checkpoint_action.main_agent_saved_memory
+        start_payload, start_events = await emit_session_start(
+            hook_manager,
+            session_record,
+            history,
+            recovered=recovered,
+        )
+        session_record = replace(session_record, title=start_payload["title"])
+        history = start_payload["history"]
+        recovered = start_payload["recovered"]
+    except (EOFError, KeyboardInterrupt):
+        if not tools_task.done():
+            tools_task.cancel()
+        print(ui.event_line("terminal", "aborted_streaming", "red"))
+        logger.info("chat_loop aborted while choosing session")
+        return
+    await _run_selected_session(
+        max_turns=max_turns,
+        startup_started=startup_started,
+        session_setup_ms=session_setup_ms,
+        session_select_ms=session_select_ms,
+        tools_task=tools_task,
+        session_store=session_store,
+        checkpoint_store=checkpoint_store,
+        session_record=session_record,
+        history=history,
+        pending_user_input=pending_user_input,
+        main_agent_saved_memory=last_main_agent_saved_memory,
+        hook_manager=hook_manager,
+        ui=ui,
+        start_events=start_events,
+    )
 
 
 def main() -> None:

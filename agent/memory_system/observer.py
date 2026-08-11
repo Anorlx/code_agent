@@ -28,7 +28,7 @@ class MemoryObserver:
         self.personal_memory = PersonalMemorySystem(self.memory_root / "memory.sqlite3")
 
     def record_messages(self, session_id: str, messages: list[dict[str, Any]]) -> list[str]:
-        """Persist the uncompressed trace before the next compaction can hide it."""
+        """Persist the uncompressed trace before the next preprocess can compact it."""
         return self.personal_memory.record_messages(session_id, messages)
 
     def _signature(self, messages: list[dict[str, Any]], session_id: str | None = None) -> str:
